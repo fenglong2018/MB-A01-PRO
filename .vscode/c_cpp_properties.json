@@ -1,0 +1,73 @@
+{
+    "configurations": [
+        {
+            "name": "WSL-Ubuntu",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/config",
+                "${workspaceFolder}/app",
+                "${workspaceFolder}/app/mode",
+                "${workspaceFolder}/app/session",
+                "${workspaceFolder}/services/cli",
+                "${workspaceFolder}/services/stream",
+                "${workspaceFolder}/services/log",
+                "${workspaceFolder}/services/usb",
+                "${workspaceFolder}/board",
+                "${workspaceFolder}/BSP/key",
+                "${workspaceFolder}/BSP/led",
+                "${workspaceFolder}/BSP/rdss",
+                "${workspaceFolder}/BSP/gnss",
+                "${workspaceFolder}/firmware/CMSIS/core",
+                "${workspaceFolder}/firmware/CMSIS/device",
+                "${workspaceFolder}/firmware/n32wb452_std_periph_driver/inc",
+                "${workspaceFolder}/middlewares/rt-thread/include",
+                "${workspaceFolder}/middlewares/rt-thread/include/libc",
+                "${workspaceFolder}/DeviceDrivers/inc",
+                "${workspaceFolder}/DeviceDrivers/gpio/inc",
+                "${workspaceFolder}/DeviceDrivers/uart/inc",
+                "${workspaceFolder}/DeviceDrivers/watchdog/inc",
+                "${workspaceFolder}/middlewares/rt-thread/components/drivers/include",
+                "${workspaceFolder}/middlewares/rt-thread/components/drivers/include/drivers",
+                "${workspaceFolder}/middlewares/rt-thread/components/drivers/include/ipc",
+                "${workspaceFolder}/middlewares/rt-thread/components/drivers/cherryusb/core",
+                "${workspaceFolder}/middlewares/rt-thread/components/drivers/cherryusb/common",
+                "${workspaceFolder}/middlewares/rt-thread/components/drivers/cherryusb/class/cdc",
+                "${workspaceFolder}/middlewares/rt-thread/components/drivers/cherryusb/port/fsdev",
+                "/usr/lib/gcc/arm-none-eabi/13.2.1/include",
+                "/usr/arm-none-eabi/include"
+            ],
+            "defines": [
+                "N32WB452",
+                "USE_STDPERIPH_DRIVER",
+                "RT_USING_NEWLIB",
+                "HAVE_SIGVAL",
+                "HAVE_SIGEVENT",
+                "HAVE_SIGINFO",
+                "HAVE_SYS_SELECT_H"
+            ],
+            "compilerPath": "/usr/bin/arm-none-eabi-gcc",
+            "compilerArgs": [
+                "-mcpu=cortex-m4",
+                "-mthumb"
+            ],
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "linux-gcc-arm",
+            "browse": {
+                "path": [
+                    "${workspaceFolder}/config",
+                    "${workspaceFolder}/app",
+                    "${workspaceFolder}/services",
+                    "${workspaceFolder}/board",
+                    "${workspaceFolder}/BSP",
+                    "${workspaceFolder}/DeviceDrivers",
+                    "${workspaceFolder}/firmware",
+                    "${workspaceFolder}/middlewares/rt-thread/include",
+                    "${workspaceFolder}/middlewares/rt-thread/components/drivers"
+                ],
+                "limitSymbolsToIncludedHeaders": false
+            }
+        }
+    ],
+    "version": 4
+}

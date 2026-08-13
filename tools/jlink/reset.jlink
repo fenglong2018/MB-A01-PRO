@@ -1,0 +1,4 @@
+// 评估板调试口 J12（SWD）：复位并 halt
+r
+halt
+qc

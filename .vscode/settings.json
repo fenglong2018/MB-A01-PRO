@@ -1,0 +1,31 @@
+{
+    "C_Cpp.default.configurationProvider": "",
+    "C_Cpp.intelliSenseEngine": "default",
+    "C_Cpp.autocomplete": "default",
+    "C_Cpp.errorSquiggles": "enabled",
+    "C_Cpp.default.compilerPath": "/usr/bin/arm-none-eabi-gcc",
+    "C_Cpp.default.intelliSenseMode": "linux-gcc-arm",
+    "C_Cpp.default.cStandard": "c11",
+    "C_Cpp.workspaceParsingPriority": "highest",
+    "C_Cpp.default.compileCommands": "",
+    "files.associations": {
+        "*.h": "c",
+        "*.c": "c"
+    },
+    "editor.gotoLocation.multipleDefinitions": "goto",
+    "search.exclude": {
+        "**/build": true,
+        "**/GCC/build": true,
+        "**/*.o": true,
+        "**/*.d": true,
+        "**/*.lst": true,
+        "**/*.map": true,
+        "**/*.elf": true,
+        "**/*.hex": true,
+        "**/*.bin": true
+    },
+    "files.watcherExclude": {
+        "**/build/**": true,
+        "**/GCC/build/**": true
+    }
+}

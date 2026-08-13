@@ -1,0 +1,9 @@
+/build/
+GCC/build/
+*.o
+*.d
+*.lst
+*.map
+*.elf
+*.hex
+*.bin

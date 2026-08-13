@@ -1,0 +1,8 @@
+// 评估板调试口 J12（SWD）：烧录 build/User.hex 后复位运行（相对仓库根目录）
+r
+halt
+loadfile build/User.hex
+halt
+r
+g
+qc
