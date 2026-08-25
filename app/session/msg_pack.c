@@ -2,8 +2,8 @@
  * @file msg_pack.c
  * @brief MBA01 报文组包：现有字段填充，缺项 stub
  *
- * 缺：真实首次定位时间 / GNSS 日期→Unix / Flash 多点缓存（后补）
- * 本机卡号：RDSS `$BDICP` → cfg.device_id（见 BSP/rdss）
+ * 缺：Flash 多点缓存（后补）
+ * 本机卡号字段：设备编号 cfg.device_id；当前/首次定位 Unix 来自 GNSS RMC
  */
 #include "msg_pack.h"
 #include "cfg.h"
@@ -91,8 +91,8 @@ static uint16_t pack_single(uint8_t *body, const gnss_fix_t *fix, uint8_t alarm_
     fmt_deg(dlon, lon, sizeof(lon), 3, 7);
     fmt_deg(dlat, lat, sizeof(lat), 2, 7);
 
-    /* 时间戳 stub：无 RMC 日期时填 0（后补） */
-    pad_u32(0, ts, 10);
+    /* 时间戳：本次 GNSS RMC Unix；无日期则 0 */
+    pad_u32(fix->unix_sec, ts, 10);
 
     body[p++] = alarm_mode ? 'A' : 'N';
     memcpy(&body[p], ts, 10);
@@ -129,8 +129,8 @@ uint16_t msg_pack_loca_up(uint8_t *out, uint16_t out_max,
         return 0;
     }
 
-    pad_u32(cfg_get_device_id(), id, 10); /* RDSS $BDICP 成功后会同步到 cfg */
-    pad_u32(0, first_ts, 10); /* 首次定位时间 stub */
+    pad_u32(cfg_get_device_id(), id, 10);
+    pad_u32(cfg_get_first_fix_unix(), first_ts, 10);
 #if USE_ADC_BAT
     pct = adc_bat_get_percent();
 #else

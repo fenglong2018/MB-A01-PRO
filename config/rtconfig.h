@@ -67,12 +67,14 @@
 /* SECTION: Console options */
 #define RT_USING_CONSOLE
 /* the buffer size of console*/
-#define RT_CONSOLEBUF_SIZE          128
-// <string name="RT_CONSOLE_DEVICE_NAME" description="The device name for console" default="uart1" />
-#define RT_CONSOLE_DEVICE_NAME      "usart1"
+#define RT_CONSOLEBUF_SIZE          512
+/* PA9 = MCU_EN_LNA_GNSS，不能当 USART1 TX。不绑 console 设备：
+ * rt_show_version / rt_kprintf 走空的 rt_hw_console_output；
+ * 版本横幅等主机打开 CDC（DTR=1）后由 services/log 打一次。 */
+/* #define RT_CONSOLE_DEVICE_NAME      "usart1" */
 
 #define         RT_USING_SERIAL
-#define         RT_USING_USART1
+/* #define         RT_USING_USART1 */
 
 //#define 				RT_USING_WDT
 /* RT-Thread Components */

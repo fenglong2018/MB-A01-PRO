@@ -53,8 +53,14 @@ uint16_t wInterrupt_Mask;
 USB_DeviceMess Device_Info;
 USER_STANDARD_REQUESTS* pUser_Standard_Requests;
 
+extern void USB_Interrupts_Config(void);
+
 /**
  * @brief USB system initialization
+ *
+ * 顺序对齐旧 wsl-ubuntu-gcc-passthrough：
+ * 先 Init（PowerOn + IMR），再开 NVIC，最后才拉 DP。
+ * 主机一看到 DP 就会读描述符，NVIC 必须已经就绪。
  */
 void USB_Init(void)
 {
@@ -64,6 +70,7 @@ void USB_Init(void)
     pUser_Standard_Requests = &User_Standard_Requests;
     /* Initialize devices one by one */
     pProperty->Init();
+    USB_Interrupts_Config();
     /*Pull up DP*/
     _EnPortPullup();
 }

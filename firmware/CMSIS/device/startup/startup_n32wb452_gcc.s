@@ -91,11 +91,12 @@ LoopFillZerobss:
   bcc  FillZerobss
 
 /* Call the clock system intitialization function.*/
-  bl  SystemInit   
+  bl  SystemInit
 /* Call static constructors */
     bl __libc_init_array
-/* Call the application's entry point.*/
-  bl  main
+/* RT-Thread：必须进 entry()→rtthread_startup()，不能直接 main()
+ * 否则调度器未启动，main 里 rt_thread_delay 会断言 thread != RT_NULL */
+  bl  entry
   bx  lr    
 .size  Reset_Handler, .-Reset_Handler
 

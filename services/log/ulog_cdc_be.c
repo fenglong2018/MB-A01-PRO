@@ -5,6 +5,7 @@
  * 注意：不要包含 cdc_acm.h（会拉入 usb_cdc.h 的 __PACKED，与工程其它头冲突）。
  */
 #include <rtthread.h>
+#include <rthw.h>
 #include <stdint.h>
 #include <ulog.h>
 #include "ulog_cdc_be.h"
@@ -12,6 +13,68 @@
 #include "product_config.h"
 
 static struct ulog_backend s_cdc_be;
+static volatile uint8_t s_pt_hold;
+static volatile uint8_t s_pt_mute = (uint8_t)ULOG_CDC_PASSTHRU_MUTE_DEFAULT;
+static volatile uint8_t s_banner_done;
+
+/** 仅线程上下文（ulog_async）。USB ISR 里不能打、也不能启定时器。 */
+static void console_banner_try_print(void)
+{
+    static char buf[160];
+    rt_base_t level;
+    int n;
+
+    if (!cdc_acm_is_dtr_enable())
+    {
+        return;
+    }
+
+    level = rt_hw_interrupt_disable();
+    if (s_banner_done)
+    {
+        rt_hw_interrupt_enable(level);
+        return;
+    }
+    s_banner_done = 1u;
+    rt_hw_interrupt_enable(level);
+
+    n = rt_snprintf(buf, sizeof(buf),
+                    "\r\n \\ | /\r\n"
+                    "- RT -     Thread Operating System\r\n"
+                    " / | \\     %d.%d.%d build %s\r\n"
+                    " 2006 - 2019 Copyright by rt-thread team\r\n",
+                    (int)RT_VERSION, (int)RT_SUBVERSION, (int)RT_REVISION,
+                    __DATE__);
+    if (n <= 0)
+    {
+        return;
+    }
+    if (n >= (int)sizeof(buf))
+    {
+        n = (int)sizeof(buf) - 1;
+    }
+    (void)cdc_acm_write((const uint8_t *)buf, (uint32_t)n);
+}
+
+void ulog_cdc_passthru_hold(int hold)
+{
+    s_pt_hold = hold ? 1u : 0u;
+}
+
+int ulog_cdc_passthru_held(void)
+{
+    return s_pt_hold ? 1 : 0;
+}
+
+void ulog_cdc_set_passthru_mute(int mute)
+{
+    s_pt_mute = mute ? 1u : 0u;
+}
+
+int ulog_cdc_get_passthru_mute(void)
+{
+    return s_pt_mute ? 1 : 0;
+}
 
 /**
  * 在 ulog_async 线程上下文中调用。
@@ -37,6 +100,12 @@ static void ulog_cdc_backend_output(struct ulog_backend *backend,
         return;
     }
 
+    /* 透传占用同一 CDC：默认丢弃 ulog，避免插进 NMEA 行中间 */
+    if (s_pt_hold && s_pt_mute)
+    {
+        return;
+    }
+
     while (!cdc_acm_is_dtr_enable() && (wait_ms < ULOG_CDC_DTR_WAIT_MS))
     {
         rt_thread_mdelay(ULOG_CDC_DTR_POLL_MS);
@@ -48,6 +117,7 @@ static void ulog_cdc_backend_output(struct ulog_backend *backend,
         return;
     }
 
+    console_banner_try_print();
     (void)cdc_acm_write((const uint8_t *)log, (uint32_t)len);
 }
 

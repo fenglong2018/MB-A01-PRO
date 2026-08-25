@@ -1,0 +1,17 @@
+/*********************************************************************
+* N32WB452：逻辑关机进 STOP2 后 SWD 会断开。
+* F5 时先拉 nRESET，再连 SWD（与 make flash 的 r 同类）。
+* 评估板 J12 需接到 MCU NRST。
+*********************************************************************/
+int InitTarget(void) {
+  JLINK_SYS_Report("InitTarget: nRESET low (STOP2 connect-under-reset)");
+  JLINK_JTAG_ResetPin = 0;
+  JLINK_SYS_Sleep(50);
+  return 0;
+}
+
+int AfterResetTarget(void) {
+  JLINK_JTAG_ResetPin = 1;
+  JLINK_SYS_Sleep(20);
+  return 0;
+}

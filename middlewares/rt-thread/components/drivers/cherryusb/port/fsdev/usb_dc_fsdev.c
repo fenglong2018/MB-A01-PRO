@@ -2,7 +2,7 @@
 #include "usb_fsdev_reg.h"
 
 #ifndef USBD_IRQHandler
-#define USBD_IRQHandler USB_LP_CAN1_RX0_IRQHandler //use actual usb irq name instead
+#define USBD_IRQHandler cherryusb_usbd_irq
 #endif
 
 #ifndef USB_BASE
@@ -61,29 +61,22 @@ int usb_dc_init(void)
 
     usb_dc_low_level_init();
 
-    /* Init Device */
-    /* CNTR_FRES = 1 */
+    /* PDWN 随 CNTR=FRES 清零后，收发器需要短暂稳定时间 */
     USB->CNTR = (uint16_t)USB_CNTR_FRES;
-
-    /* CNTR_FRES = 0 */
+    {
+        volatile uint32_t i;
+        for (i = 0; i < 72000U; i++) {
+            __asm volatile("nop");
+        }
+    }
     USB->CNTR = 0U;
 
-    /* Clear pending interrupts */
     USB->ISTR = 0U;
-
-    /*Set Btable Address*/
     USB->BTABLE = BTABLE_ADDRESS;
 
-    uint32_t winterruptmask;
-
-    /* Set winterruptmask variable */
-    winterruptmask = USB_CNTR_CTRM | USB_CNTR_WKUPM |
-                     USB_CNTR_SUSPM | USB_CNTR_ERRM |
-                     USB_CNTR_SOFM | USB_CNTR_ESOFM |
-                     USB_CNTR_RESETM;
-
-    /* Set interrupt mask */
-    USB->CNTR = (uint16_t)winterruptmask;
+    /* 枚举前不要 SUSPM：无 SOF 时会进 SUSP→LP_MODE，主机读描述符失败 */
+    USB->CNTR = (uint16_t)(USB_CNTR_CTRM | USB_CNTR_WKUPM |
+                           USB_CNTR_ERRM | USB_CNTR_RESETM);
 
     return 0;
 }
@@ -313,7 +306,6 @@ void USBD_IRQHandler(void)
     uint8_t epindex;
     wIstr = USB->ISTR;
 
-    uint16_t store_ep[8];
     if (wIstr & USB_ISTR_CTR) {
         while ((USB->ISTR & USB_ISTR_CTR) != 0U) {
             wIstr = USB->ISTR;
@@ -378,6 +370,7 @@ void USBD_IRQHandler(void)
         }
     }
     if (wIstr & USB_ISTR_RESET) {
+        USB->CNTR &= (uint16_t) ~(USB_CNTR_LP_MODE | USB_CNTR_FSUSP);
         usbd_event_notify_handler(USBD_EVENT_RESET, NULL);
         usb_dc_cfg.pma_offset = USB_BTABLE_SIZE;
         USB->ISTR &= (uint16_t)(~USB_ISTR_RESET);
@@ -395,37 +388,11 @@ void USBD_IRQHandler(void)
         USB->ISTR &= (uint16_t)(~USB_ISTR_WKUP);
     }
     if (wIstr & USB_ISTR_SUSP) {
-        /* WA: To Clear Wakeup flag if raised with suspend signal */
-
-        /* Store Endpoint register */
-        for (uint8_t i = 0U; i < 8U; i++) {
-            store_ep[i] = PCD_GET_ENDPOINT(USB, i);
-        }
-
-        /* FORCE RESET */
-        USB->CNTR |= (uint16_t)(USB_CNTR_FRES);
-
-        /* CLEAR RESET */
-        USB->CNTR &= (uint16_t)(~USB_CNTR_FRES);
-
-        /* wait for reset flag in ISTR */
-        while ((USB->ISTR & USB_ISTR_RESET) == 0U) {
-        }
-
-        /* Clear Reset Flag */
-        USB->ISTR &= (uint16_t)(~USB_ISTR_RESET);
-        /* Restore Registre */
-        for (uint8_t i = 0U; i < 8U; i++) {
-            PCD_SET_ENDPOINT(USB, i, store_ep[i]);
-        }
-
-        /* Force low-power mode in the macrocell */
-        USB->CNTR |= (uint16_t)USB_CNTR_FSUSP;
-
-        /* clear of the ISTR bit must be done after setting of CNTR_FSUSP */
+        /* 同时有 RESET 时不要进挂起；也不进 LP_MODE（会关模拟收发器） */
         USB->ISTR &= (uint16_t)(~USB_ISTR_SUSP);
-
-        USB->CNTR |= (uint16_t)USB_CNTR_LP_MODE;
+        if ((USB->ISTR & USB_ISTR_RESET) == 0U) {
+            USB->CNTR |= (uint16_t)USB_CNTR_FSUSP;
+        }
     }
     if (wIstr & USB_ISTR_SOF) {
         USB->ISTR &= (uint16_t)(~USB_ISTR_SOF);

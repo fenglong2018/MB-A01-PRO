@@ -34,7 +34,11 @@
  */
 #include "n32wb452_it.h"
 #include "n32wb452.h"
+#include "n32wb452_exti.h"
 #include "main.h"
+#include "usb_istr.h"
+#include <rthw.h>
+#include <rtthread.h>
 
 /** @addtogroup N32WB452_StdPeriph_Template
  * @{
@@ -117,7 +121,14 @@ void DebugMon_Handler(void)
 
 void USBWakeUp_IRQHandler(void)
 {
-  EXTI_ClrITPendBit(EXTI_LINE18);
+    EXTI_ClrITPendBit(EXTI_LINE18);
+}
+
+void USB_LP_CAN1_RX0_IRQHandler(void)
+{
+    rt_interrupt_enter();
+    USB_Istr();
+    rt_interrupt_leave();
 }
 
 /**

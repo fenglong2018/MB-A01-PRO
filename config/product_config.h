@@ -27,6 +27,7 @@
 #define USE_GNSS            1   /* BSP/gnss */
 #define USE_RTC             1   /* BSP/rtc：LSE 32768 + 日历，可被 GNSS/RDSS 校准 */
 #define USE_PM              1   /* BSP/pm：idle hook → STOP0 浅睡 */
+#define USE_IWDG            1   /* BSP/iwdg：非关机态开，超时≈26s */
 #define USE_CLI             1   /* services/cli：JSON 控制面 */
 #define USE_JSON_FILE       0
 #define USE_MODBUS          0
@@ -40,6 +41,7 @@
 #define USE_GNSS            0
 #define USE_RTC             0
 #define USE_PM              0
+#define USE_IWDG            0
 #define USE_CLI             0
 #define USE_JSON_FILE       0
 #define USE_MODBUS          0

@@ -37,9 +37,9 @@
 
 
 //  <i>Default: 144
-#define n32wb452_SRAM_SIZE           144
-#define n32wb452_SRAM_START          (0x20000000 + n32wb452_SRAM_SIZE/2 * 1024)
-#define n32wb452_SRAM_END            (0x20000000 + n32wb452_SRAM_SIZE * 1024)
+#define n32wb452_SRAM_SIZE           128
+#define n32wb452_SRAM_START          (0x20000000 + 72 * 1024)
+#define n32wb452_SRAM_END            (0x20020000) /* 不含 R-SRAM 16KB */
 
 void rt_hw_init(void);
 

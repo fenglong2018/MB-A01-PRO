@@ -17,6 +17,7 @@
 #ifdef RT_USING_ULOG
 #include <ulog.h>
 #endif
+#include "ulog_cdc_be.h"
 
 static const char *json_find_key(const char *json, const char *key)
 {
@@ -246,6 +247,17 @@ int cli_json_handle_line(const char *line, char *rsp, int rsp_size)
         return rsp_ok(rsp, rsp_size, id, tmp);
     }
 
+    if (strcmp(cmd, "log.cdc") == 0)
+    {
+        if (json_get_int(line, "passthru_mute", &lvl) == 0)
+        {
+            ulog_cdc_set_passthru_mute(lvl ? 1 : 0);
+        }
+        snprintf(tmp, sizeof(tmp), "\"passthru_mute\":%d,\"held\":%d",
+                 ulog_cdc_get_passthru_mute(), ulog_cdc_passthru_held());
+        return rsp_ok(rsp, rsp_size, id, tmp);
+    }
+
     if (strcmp(cmd, "log.lvl") == 0)
     {
         if (json_get_int(line, "lvl", &lvl) != 0)
@@ -318,6 +330,23 @@ int cli_json_handle_line(const char *line, char *rsp, int rsp_size)
         if (json_get_int(line, "pa_enable", &pa) == 0)
         {
             cfg_set_pa_enable(pa ? 1 : 0);
+            has = 1;
+        }
+        {
+            int off = -1;
+            if (json_get_int(line, "charge_offset_mv", &off) == 0)
+            {
+                if (off < 0)
+                {
+                    off = 0;
+                }
+                cfg_set_charge_offset_mv((uint16_t)off);
+                has = 1;
+            }
+        }
+        if (json_get_string(line, "hw_ver", pin, sizeof(pin)) == 0)
+        {
+            cfg_set_hw_ver(pin);
             has = 1;
         }
         if (!has)

@@ -21,6 +21,25 @@ extern "C" {
 #ifndef MODE_BATT_MS
 #define MODE_BATT_MS            5000
 #endif
+/** ON/FAKE_OFF←ON 连续无卡满这么多分钟 → 真 OFF；0=关闭。不进 JSON */
+#ifndef MODE_ON_NOSIM_OFF_MIN
+#define MODE_ON_NOSIM_OFF_MIN   60
+#endif
+/** 无卡 ON 一拍结束后先亮灯提示再假关机；0=立刻假关机 */
+#ifndef MODE_ON_NOSIM_HINT_MS
+#define MODE_ON_NOSIM_HINT_MS   5000
+#endif
+/**
+ * 上电/STOP2 醒来后多久之内不真关机。
+ * 留给各 INIT_APP + KEY 线程把复位时的按键电平跑成短按/长按。
+ */
+#ifndef MODE_BOOT_HOLD_MS
+#define MODE_BOOT_HOLD_MS       400
+#endif
+/** CHARGE/ON 等已开狗时，mode 线程最多等这么久就回来喂一次（须 < IWDG ≈26s） */
+#ifndef MODE_IWDG_FEED_MS
+#define MODE_IWDG_FEED_MS       5000
+#endif
 
 typedef enum
 {
@@ -31,8 +50,8 @@ typedef enum
     MODE_ST_CHARGE,
     MODE_ST_FORCE_OFF,     /**< 低压强制关机；仅 USB→CHARGE 解除 */
     MODE_ST_PASSTHRU,      /**< 调试透传；通道见 MODE_PT_* */
-    MODE_ST_LOW_BATT,      /**< 低电预警：只发 1 条短报文后回 ON */
-    /* MODE_ST_SLEEP：假关机预留，暂不实施 */
+    MODE_ST_LOW_BATT,      /**< 低电预警 overlay：1 条 N 后回进入前的态 */
+    MODE_ST_FAKE_OFF,      /**< 假关机：发完一拍；BKP.resume 为 ON 或 ALARM */
 } mode_state_t;
 
 /** 透传通道掩码（可组合 = GNSS+RDSS） */
@@ -48,9 +67,13 @@ typedef enum
 #define MODE_EVT_BATT_TO        (1u << 5)
 #define MODE_EVT_BAT_PROTECT    (1u << 6)  /* ADC：进入保护阈值 */
 #define MODE_EVT_PT_APPLY       (1u << 7)  /* 应用 s_pt_req_flags */
-#define MODE_EVT_ALARM_EXPIRE   (1u << 8)  /* 告警会话满 48h → ON */
+#define MODE_EVT_SIM            (1u << 8)  /* SIM 插拔确认；假关机 ON 用来开关 10s 灯 */
 #define MODE_EVT_BAT_WARN       (1u << 9)  /* ADC：进入预警 → LOW_BATT */
-#define MODE_EVT_LOW_BATT_DONE  (1u << 10) /* LOW_BATT 单次报文结束 → ON */
+#define MODE_EVT_LOW_BATT_DONE  (1u << 10) /* LOW_BATT 单次报文结束 → 进入前的态 */
+#define MODE_EVT_SHOT_BUSY      (1u << 11) /* session 开跑一拍：FAKE_OFF→resume */
+#define MODE_EVT_SHOT_IDLE      (1u << 12) /* session 一拍结束：可进 FAKE_OFF */
+#define MODE_EVT_RTC_WU         (1u << 13) /* RTC 10s：FAKE_OFF 空载采 1 次 */
+#define MODE_EVT_BAT_OK         (1u << 14)  /* ADC：回到 OK，清 LOW_BATT 已发标志 */
 
 /** 建事件+线程；上电采样 USB/保护。一般由 INIT_APP_EXPORT 调用 */
 int mode_init(void);
@@ -73,6 +96,12 @@ int mode_passthru_set(uint8_t flags);
  * 禁止在 ISR 里做重活；ISR 应先唤醒业务线程再 post（KEY 已如此）。
  */
 void mode_post_event(rt_uint32_t evt);
+
+/**
+ * ALARM 第一次 GNSS 校时后锁节奏锚点（2/5/10min；session 调用）。
+ * 逻辑告警（ALARM 或 FAKE_OFF←ALARM）且 unix≠0 才写 BKP。
+ */
+void mode_alarm_anchor_latch(uint32_t unix_sec);
 
 #ifdef __cplusplus
 }

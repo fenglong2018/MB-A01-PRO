@@ -1,6 +1,6 @@
 /**
  * @file gnss.c
- * @brief ATGM336H：正常定位（GGA q≥1 / 30s）与透传；结果 rt_mq 上报
+ * @brief ATGM336H：GGA 定位 + RMC 日期时刻；透传不解析。校时由 session 调用 rtc_post_unix。
  */
 #include <rtthread.h>
 #include <rtdevice.h>
@@ -53,6 +53,9 @@ static char s_line[GNSS_LINE_MAX];
 static uint16_t s_line_len;
 static uint8_t s_pwr_on;
 static uint8_t s_lna_on;
+static uint8_t s_gga_ok;
+static gnss_fix_t s_pending_fix;
+static uint32_t s_rmc_unix;
 
 static void gnss_gpio_init(void)
 {
@@ -307,6 +310,121 @@ static int parse_gga(const char *line, gnss_fix_t *fix)
     return 1;
 }
 
+static int is_leap_year(int y)
+{
+    return (((y % 4) == 0) && ((y % 100) != 0)) || ((y % 400) == 0);
+}
+
+/** UTC 年月日时分秒 → Unix；非法返回 0。不走 mktime（避免本地时区）。 */
+static uint32_t utc_to_unix(int y, int mo, int d, int h, int mi, int s)
+{
+    static const uint8_t dim[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    uint32_t days = 0;
+    int i;
+    int md;
+
+    if ((y < 2000) || (y > 2099) || (mo < 1) || (mo > 12) || (d < 1) ||
+        (h < 0) || (h > 23) || (mi < 0) || (mi > 59) || (s < 0) || (s > 60))
+    {
+        return 0;
+    }
+    md = (int)dim[mo - 1];
+    if ((mo == 2) && is_leap_year(y))
+    {
+        md = 29;
+    }
+    if (d > md)
+    {
+        return 0;
+    }
+    for (i = 1970; i < y; i++)
+    {
+        days += is_leap_year(i) ? 366u : 365u;
+    }
+    for (i = 1; i < mo; i++)
+    {
+        days += dim[i - 1];
+        if ((i == 2) && is_leap_year(y))
+        {
+            days++;
+        }
+    }
+    days += (uint32_t)(d - 1);
+    return days * 86400u + (uint32_t)h * 3600u + (uint32_t)mi * 60u + (uint32_t)s;
+}
+
+static int parse_hhmmss(const char *s, int *h, int *mi, int *sec)
+{
+    if ((s == RT_NULL) || (strlen(s) < 6))
+    {
+        return -1;
+    }
+    *h = (s[0] - '0') * 10 + (s[1] - '0');
+    *mi = (s[2] - '0') * 10 + (s[3] - '0');
+    *sec = (s[4] - '0') * 10 + (s[5] - '0');
+    if ((s[0] < '0') || (s[0] > '9') || (s[1] < '0') || (s[1] > '9') ||
+        (s[2] < '0') || (s[2] > '9') || (s[3] < '0') || (s[3] > '9') ||
+        (s[4] < '0') || (s[4] > '9') || (s[5] < '0') || (s[5] > '9'))
+    {
+        return -1;
+    }
+    return 0;
+}
+
+/**
+ * xxRMC：status=A 且 date=ddmmyy → UTC Unix。
+ * 返回 1=得到 unix，0=语句可忽略，-1=不是 RMC。
+ */
+static int parse_rmc_unix(const char *line, uint32_t *out_unix)
+{
+    char talker[8];
+    char fld[24];
+    char date[16];
+    int h, mi, sec;
+    int day, mon, year;
+    uint32_t u;
+
+    if (nmea_field(line, 0, talker, sizeof(talker)) != 0)
+    {
+        return -1;
+    }
+    if ((strlen(talker) < 3) || (strcmp(talker + strlen(talker) - 3, "RMC") != 0))
+    {
+        return -1;
+    }
+    if ((nmea_field(line, 2, fld, sizeof(fld)) != 0) || (fld[0] != 'A'))
+    {
+        return 0;
+    }
+    if ((nmea_field(line, 1, fld, sizeof(fld)) != 0) ||
+        (parse_hhmmss(fld, &h, &mi, &sec) != 0))
+    {
+        return 0;
+    }
+    if ((nmea_field(line, 9, date, sizeof(date)) != 0) || (strlen(date) < 6))
+    {
+        return 0;
+    }
+    if ((date[0] < '0') || (date[0] > '9'))
+    {
+        return 0;
+    }
+    day = (date[0] - '0') * 10 + (date[1] - '0');
+    mon = (date[2] - '0') * 10 + (date[3] - '0');
+    year = 2000 + (date[4] - '0') * 10 + (date[5] - '0');
+    if ((day == 0) && (mon == 0))
+    {
+        return 0;
+    }
+    u = utc_to_unix(year, mon, day, h, mi, sec);
+    if (u == 0)
+    {
+        return 0;
+    }
+    *out_unix = u;
+    return 1;
+}
+
 static void post_result(uint8_t reason, uint8_t ok, const gnss_fix_t *fix)
 {
     gnss_msg_t msg;
@@ -352,12 +470,30 @@ static void finish_fix(uint8_t reason, uint8_t ok, const gnss_fix_t *fix)
     gnss_power_off();
     s_state = GNSS_ST_OFF;
     s_fix_deadline = 0;
-    rt_kprintf("[GNSS] fix done reason=%u ok=%u\n", reason, ok);
+    s_gga_ok = 0;
+    s_rmc_unix = 0;
+    rt_kprintf("[GNSS] fix done reason=%u ok=%u unix=%lu\n",
+               reason, ok, (unsigned long)(ok && fix ? fix->unix_sec : 0u));
+}
+
+static void try_finish_fix(void)
+{
+    if (!s_gga_ok)
+    {
+        return;
+    }
+    if (s_rmc_unix == 0)
+    {
+        return; /* 等 RMC；超时再无日期关电 */
+    }
+    s_pending_fix.unix_sec = s_rmc_unix;
+    finish_fix(GNSS_RESULT_OK, 1, &s_pending_fix);
 }
 
 static void on_line(const char *line)
 {
     gnss_fix_t fix;
+    uint32_t rmc_unix = 0;
     int r;
 
     if (s_state == GNSS_ST_PASSTHRU)
@@ -383,10 +519,21 @@ static void on_line(const char *line)
         return;
     }
 
+    r = parse_rmc_unix(line, &rmc_unix);
+    if (r == 1)
+    {
+        s_rmc_unix = rmc_unix;
+        try_finish_fix();
+        return;
+    }
+
     r = parse_gga(line, &fix);
     if (r == 1)
     {
-        finish_fix(GNSS_RESULT_OK, 1, &fix);
+        s_pending_fix = fix;
+        s_pending_fix.unix_sec = s_rmc_unix;
+        s_gga_ok = 1;
+        try_finish_fix();
     }
 }
 
@@ -452,6 +599,9 @@ static void handle_cmd(const gnss_cmd_t *cmd)
         }
         gnss_power_on();
         s_state = GNSS_ST_FIX_WAIT;
+        s_gga_ok = 0;
+        s_rmc_unix = 0;
+        memset(&s_pending_fix, 0, sizeof(s_pending_fix));
         s_fix_deadline = rt_tick_get() + rt_tick_from_millisecond(GNSS_FIX_TIMEOUT_MS);
         rt_kprintf("[GNSS] fix start timeout=%ums\n", (unsigned)GNSS_FIX_TIMEOUT_MS);
         break;
@@ -523,7 +673,15 @@ static void gnss_thread_entry(void *param)
         if ((s_state == GNSS_ST_FIX_WAIT) &&
             ((rt_int32_t)(s_fix_deadline - rt_tick_get()) <= 0))
         {
-            finish_fix(GNSS_RESULT_TIMEOUT, 0, &s_last_fix);
+            if (s_gga_ok)
+            {
+                s_pending_fix.unix_sec = s_rmc_unix;
+                finish_fix(GNSS_RESULT_OK, 1, &s_pending_fix);
+            }
+            else
+            {
+                finish_fix(GNSS_RESULT_TIMEOUT, 0, &s_last_fix);
+            }
         }
     }
 }
@@ -612,6 +770,8 @@ int gnss_init(void)
     s_lna_on = 0;
     s_line_len = 0;
     s_fix_deadline = 0;
+    s_gga_ok = 0;
+    s_rmc_unix = 0;
     s_uart = RT_NULL;
 
     pwr_plna_init();

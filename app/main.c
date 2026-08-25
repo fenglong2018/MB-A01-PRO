@@ -19,3 +19,4 @@ int main(void)
         rt_thread_delay(50);
     }
 }
+

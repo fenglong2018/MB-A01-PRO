@@ -1,4 +1,4 @@
-"""主窗口：连接 / 日志 / 监视 / 配置 / 自检 / 透传 / IO。"""
+"""主窗口：连接 / 监视 / 配置 / 自检 / 射频 / IO。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QFont, QTextCursor
+from PySide6.QtGui import QBrush, QColor, QFont, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -17,13 +17,17 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QSplitter,
     QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -31,6 +35,7 @@ from PySide6.QtWidgets import (
 
 from . import APP_TITLE, __version__
 from .protocol import CmdIdGen, build_cmd, default_timeout_ms, try_parse_rsp
+from .radio_parse import RadioParser
 from .serial_link import SerialLink, list_com_ports, port_device
 
 # name, dir: out=可勾选控制, in=只读显示
@@ -95,6 +100,8 @@ class MainWindow(QMainWindow):
         self._io_checks: dict[str, QCheckBox] = {}
         self._io_dirs: dict[str, str] = {}
         self._io_ready: dict[str, int] = {}
+        self._radio = RadioParser()
+        self._radio_dirty = False
 
         self._build_ui()
         self._apply_style()
@@ -107,6 +114,10 @@ class MainWindow(QMainWindow):
         self._expire_timer.setInterval(200)
         self._expire_timer.timeout.connect(self._expire_pending)
         self._expire_timer.start()
+        self._radio_timer = QTimer(self)
+        self._radio_timer.setInterval(400)
+        self._radio_timer.timeout.connect(self._flush_radio_ui)
+        self._radio_timer.start()
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self) -> None:
@@ -126,7 +137,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._tab_monitor(), "监视")
         self.tabs.addTab(self._tab_cfg(), "配置")
         self.tabs.addTab(self._tab_test(), "自检")
-        self.tabs.addTab(self._tab_stream(), "透传")
+        self.tabs.addTab(self._tab_radio(), "射频")
         self.tabs.addTab(self._tab_io(), "IO")
         self.tabs.addTab(self._tab_raw(), "原始命令")
         split.addWidget(self.tabs)
@@ -219,9 +230,26 @@ class MainWindow(QMainWindow):
         self.ed_recv = QLineEdit("13500001")
         self.ed_dev = QLineEdit("1325000001")
         self.chk_pa = QCheckBox("有效波束后开 PA")
+        self.sp_offset = QSpinBox()
+        self.sp_offset.setRange(0, 500)
+        self.sp_offset.setValue(100)
+        self.sp_offset.setSuffix(" mV")
+        self.lbl_bd = QLabel("-")
+        self.lbl_first_fix = QLabel("-")
+        self.ed_hw = QLineEdit()
+        self.ed_hw.setMaxLength(15)
+        self.ed_hw.setPlaceholderText("出厂硬件版本，可写")
+        self.lbl_sw = QLabel("-")
+        self.lbl_upgrade = QLabel("-")
         form.addRow("recv_id", self.ed_recv)
         form.addRow("device_id", self.ed_dev)
         form.addRow("pa_enable", self.chk_pa)
+        form.addRow("charge_offset_mv", self.sp_offset)
+        form.addRow("hw_ver", self.ed_hw)
+        form.addRow("sw_ver（只读）", self.lbl_sw)
+        form.addRow("upgrade_unix（只读）", self.lbl_upgrade)
+        form.addRow("bd_card（只读）", self.lbl_bd)
+        form.addRow("first_fix_unix（只读）", self.lbl_first_fix)
         lay.addLayout(form)
         row = QHBoxLayout()
         b_get = QPushButton("读取 cfg.get")
@@ -281,41 +309,80 @@ class MainWindow(QMainWindow):
         lay.addStretch(1)
         return w
 
-    def _tab_stream(self) -> QWidget:
+    def _tab_radio(self) -> QWidget:
         w = QWidget()
         lay = QVBoxLayout(w)
-        row = QHBoxLayout()
-        b_list = QPushButton("stream.list")
-        b_list.clicked.connect(lambda: self._send("stream.list"))
-        row.addWidget(b_list)
-        row.addStretch(1)
-        lay.addLayout(row)
-        for name in ("gnss", "rdss", "cli"):
-            g = QGroupBox(name)
-            r = QHBoxLayout(g)
-            b_get = QPushButton("get")
-            b_get.clicked.connect(lambda _=False, n=name: self._send("stream.get", name=n))
-            b_on = QPushButton("enable=1")
+
+        ctrl = QHBoxLayout()
+        for name, title in (("gnss", "GNSS 透传"), ("rdss", "RDSS 透传")):
+            b_on = QPushButton(f"{title} 开")
             b_on.clicked.connect(
                 lambda _=False, n=name: self._send("stream.set", name=n, enable=1)
             )
-            b_off = QPushButton("enable=0")
+            b_off = QPushButton(f"{title} 关")
             b_off.clicked.connect(
                 lambda _=False, n=name: self._send("stream.set", name=n, enable=0)
             )
-            r.addWidget(b_get)
-            r.addWidget(b_on)
-            r.addWidget(b_off)
-            r.addStretch(1)
-            lay.addWidget(g)
+            ctrl.addWidget(b_on)
+            ctrl.addWidget(b_off)
+        self.chk_pt_mute = QCheckBox("静音 ulog")
+        self.chk_pt_mute.setChecked(True)
+        self.chk_pt_mute.toggled.connect(self._on_pt_mute_toggled)
+        self.chk_hide_nmea = QCheckBox("日志不刷 NMEA")
+        self.chk_hide_nmea.setChecked(True)
+        self.chk_hide_nmea.setToolTip("仍解析到本页表格；底部日志不再刷 $ 行")
+        self.lbl_cdc = QLabel("held=- mute=-")
+        ctrl.addWidget(self.chk_pt_mute)
+        ctrl.addWidget(self.chk_hide_nmea)
+        ctrl.addWidget(self.lbl_cdc)
+        ctrl.addStretch(1)
+        lay.addLayout(ctrl)
+
+        split = QSplitter()
+        split.setOrientation(Qt.Orientation.Horizontal)
+        split.addWidget(self._radio_gnss_panel())
+        split.addWidget(self._radio_rdss_panel())
+        split.setSizes([520, 380])
+        lay.addWidget(split, 1)
+
         tip = QLabel(
-            "透传数据本身不走 JSON；此处只开关 stream 通道。"
-            "真正模块透传依赖固件 MODE_PASSTHRU / sink。"
+            "须先开对应透传。GNSS 解析 GSV/GGA（可见星、SNR）；"
+            "RDSS 解析 $BDPWI（波束编号、S2C_d，>40 为有效）。"
+            "一次只开一个通道。关透传发 JSON enable=0。"
         )
         tip.setWordWrap(True)
         lay.addWidget(tip)
-        lay.addStretch(1)
         return w
+
+    def _radio_gnss_panel(self) -> QWidget:
+        g = QGroupBox("GNSS")
+        v = QVBoxLayout(g)
+        self.lbl_gnss_sum = QLabel("可见 -  使用 -  质量 -")
+        v.addWidget(self.lbl_gnss_sum)
+        self.tbl_gnss = QTableWidget(0, 5)
+        self.tbl_gnss.setHorizontalHeaderLabels(["系统", "PRN", "仰角", "方位", "SNR"])
+        self.tbl_gnss.verticalHeader().setVisible(False)
+        self.tbl_gnss.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tbl_gnss.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        hdr = self.tbl_gnss.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        v.addWidget(self.tbl_gnss, 1)
+        return g
+
+    def _radio_rdss_panel(self) -> QWidget:
+        g = QGroupBox("RDSS 波束")
+        v = QVBoxLayout(g)
+        self.lbl_rdss_sum = QLabel("PWI时间 -  波束 -  有效 -")
+        v.addWidget(self.lbl_rdss_sum)
+        self.tbl_rdss = QTableWidget(0, 3)
+        self.tbl_rdss.setHorizontalHeaderLabels(["波束", "S2C_d", "有效"])
+        self.tbl_rdss.verticalHeader().setVisible(False)
+        self.tbl_rdss.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tbl_rdss.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        hdr = self.tbl_rdss.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        v.addWidget(self.tbl_rdss, 1)
+        return g
 
     def _tab_io(self) -> QWidget:
         w = QWidget()
@@ -360,8 +427,8 @@ class MainWindow(QMainWindow):
         lay.addWidget(g_out)
         lay.addWidget(g_in)
         tip = QLabel(
-            "勾选=有效。LED1/2/3 为低电平点亮（勾选下发 val=0）。"
-            "固件骨架阶段多数 ready=0，失败会自动回退勾选。"
+            "勾选=有效。LED1/2/3 低电平点亮（勾选下发 val=0）。"
+            "板端 io.* 尚未接 GPIO，会 not_ready；电源轨用会话/透传后万用表量，灯用自检 test.led。"
         )
         tip.setWordWrap(True)
         lay.addWidget(tip)
@@ -452,6 +519,8 @@ class MainWindow(QMainWindow):
             self.chk_poll.setChecked(False)
             self.statusBar().showMessage(f"V{__version__} · 已断开")
             self._append_log("系统", "已断开", kind="sys")
+            self._radio.reset()
+            self._radio_dirty = True
             return
         label = self.cmb_port.currentText()
         port = port_device(label)
@@ -467,6 +536,8 @@ class MainWindow(QMainWindow):
         self.btn_conn.setText("断开")
         self._append_log("系统", f"打开 {port}", kind="sys")
         self._send("ping")
+        self._send("log.cdc", quiet=True)
+        self._send("cfg.get", quiet=True)
 
     def _on_poll_toggled(self, on: bool) -> None:
         if on:
@@ -497,12 +568,21 @@ class MainWindow(QMainWindow):
         except ValueError:
             QMessageBox.warning(self, APP_TITLE, "recv_id / device_id 须为整数")
             return
-        self._send(
-            "cfg.set",
-            recv_id=rid,
-            device_id=did,
-            pa_enable=1 if self.chk_pa.isChecked() else 0,
-        )
+        hw = self.ed_hw.text().strip()
+        fields: dict[str, Any] = {
+            "recv_id": rid,
+            "device_id": did,
+            "pa_enable": 1 if self.chk_pa.isChecked() else 0,
+            "charge_offset_mv": int(self.sp_offset.value()),
+        }
+        if hw:
+            fields["hw_ver"] = hw
+        self._send("cfg.set", **fields)
+
+    def _on_pt_mute_toggled(self, on: bool) -> None:
+        if not self._link.is_open:
+            return
+        self._send("log.cdc", passthru_mute=1 if on else 0)
 
     def _rtc_set(self) -> None:
         try:
@@ -595,6 +675,12 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _on_line(self, line: str) -> None:
+        s = line.strip()
+        if s.startswith("$"):
+            if self._radio.feed(s):
+                self._radio_dirty = True
+            if getattr(self, "chk_hide_nmea", None) is not None and self.chk_hide_nmea.isChecked():
+                return
         rsp = try_parse_rsp(line)
         if rsp is None:
             self._append_log("LOG", line, kind="log")
@@ -613,6 +699,45 @@ class MainWindow(QMainWindow):
             if not meta.get("quiet"):
                 self._append_log("系统", f"超时 id={i} cmd={meta.get('cmd')}", kind="sys")
 
+    def _apply_cfg_fields(self, rsp: dict[str, Any]) -> None:
+        if "recv_id" in rsp:
+            self.ed_recv.setText(str(rsp["recv_id"]))
+        if "device_id" in rsp:
+            self.ed_dev.setText(str(rsp["device_id"]))
+        if "pa_enable" in rsp:
+            self.chk_pa.setChecked(bool(rsp["pa_enable"]))
+        if "charge_offset_mv" in rsp:
+            try:
+                self.sp_offset.setValue(int(rsp["charge_offset_mv"]))
+            except (TypeError, ValueError):
+                pass
+        if "bd_card" in rsp:
+            self.lbl_bd.setText(str(rsp["bd_card"]))
+        if "first_fix_unix" in rsp:
+            u = int(rsp.get("first_fix_unix") or 0)
+            if u:
+                try:
+                    ts = datetime.fromtimestamp(u).strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    ts = "-"
+                self.lbl_first_fix.setText(f"{u} ({ts})")
+            else:
+                self.lbl_first_fix.setText("0")
+        if "hw_ver" in rsp:
+            self.ed_hw.setText(str(rsp.get("hw_ver") or ""))
+        if "sw_ver" in rsp:
+            self.lbl_sw.setText(str(rsp.get("sw_ver") or "-"))
+        if "upgrade_unix" in rsp:
+            u = int(rsp.get("upgrade_unix") or 0)
+            if u:
+                try:
+                    ts = datetime.fromtimestamp(u).strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    ts = "-"
+                self.lbl_upgrade.setText(f"{u} ({ts})")
+            else:
+                self.lbl_upgrade.setText("0")
+
     def _apply_rsp(
         self, cmd: str, rsp: dict[str, Any], fields: dict[str, Any] | None = None
     ) -> None:
@@ -627,8 +752,10 @@ class MainWindow(QMainWindow):
         elif cmd == "test.adc" and ok:
             self.lbl_bat.setText(
                 f"{rsp.get('pct', '?')}%  {rsp.get('mv', '?')} mV  "
-                f"{rsp.get('level_name', rsp.get('level', '?'))}  "
-                f"VDDA={rsp.get('vdda', '?')} mV"
+                f"lookup={rsp.get('lookup_mv', '-')}  "
+                f"chg={rsp.get('charge', '-')}  "
+                f"off={rsp.get('offset_mv', '-')}  "
+                f"{rsp.get('level_name', rsp.get('level', '?'))}"
             )
         elif cmd == "test.rtc" and ok:
             unix = rsp.get("unix", 0)
@@ -641,19 +768,20 @@ class MainWindow(QMainWindow):
         elif cmd == "test.pm" and ok:
             self.lbl_pm.setText(str(rsp.get("lock_count", "?")))
         elif cmd == "cfg.get" and ok:
-            if "recv_id" in rsp:
-                self.ed_recv.setText(str(rsp["recv_id"]))
-            if "device_id" in rsp:
-                self.ed_dev.setText(str(rsp["device_id"]))
-            if "pa_enable" in rsp:
-                self.chk_pa.setChecked(bool(rsp["pa_enable"]))
+            self._apply_cfg_fields(rsp)
         elif cmd == "cfg.set" and ok:
-            if "recv_id" in rsp:
-                self.ed_recv.setText(str(rsp["recv_id"]))
-            if "device_id" in rsp:
-                self.ed_dev.setText(str(rsp["device_id"]))
-            if "pa_enable" in rsp:
-                self.chk_pa.setChecked(bool(rsp["pa_enable"]))
+            self._apply_cfg_fields(rsp)
+        elif cmd == "log.cdc" and ok:
+            mute = int(rsp.get("passthru_mute", 1) or 0)
+            held = int(rsp.get("held", 0) or 0)
+            self.chk_pt_mute.blockSignals(True)
+            self.chk_pt_mute.setChecked(bool(mute))
+            self.chk_pt_mute.blockSignals(False)
+            self.lbl_cdc.setText(f"held={held}  mute={mute}")
+        elif cmd == "stream.set" and ok:
+            self._send("log.cdc", quiet=True)
+            self._radio.reset()
+            self._radio_dirty = True
         elif cmd == "io.get":
             pin = str(rsp.get("pin") or fields.get("pin") or "")
             if ok and pin and "val" in rsp:
@@ -696,6 +824,49 @@ class MainWindow(QMainWindow):
                         base = f"{base} *"
                     chk.setText(base)
 
+    def _flush_radio_ui(self) -> None:
+        if not self._radio_dirty:
+            return
+        self._radio_dirty = False
+        g = self._radio.gnss
+        q = "-" if g.quality is None else str(g.quality)
+        use = "-" if g.in_use is None else str(g.in_use)
+        self.lbl_gnss_sum.setText(
+            f"可见 {g.in_view}    使用 {use}    GGA质量 {q}    表内 {len(g.sats)}"
+        )
+        self.tbl_gnss.setRowCount(len(g.sats))
+        for r, sat in enumerate(g.sats):
+            vals = [sat.sys, sat.prn, sat.elv, sat.az, sat.snr]
+            snr = sat.snr
+            if snr is None:
+                color = None
+            elif snr >= 35:
+                color = QColor("#d5f5e3")
+            elif snr >= 20:
+                color = QColor("#fdebd0")
+            else:
+                color = QColor("#fadbd8")
+            for c, val in enumerate(vals):
+                it = QTableWidgetItem("" if val is None else str(val))
+                if color is not None:
+                    it.setBackground(QBrush(color))
+                self.tbl_gnss.setItem(r, c, it)
+
+        d = self._radio.rdss
+        t = "-" if d.pwi_time is None else f"{d.pwi_time:.0f}"
+        self.lbl_rdss_sum.setText(
+            f"PWI时间 {t}    波束 {d.beam_n}    门限S2C>40  {'通过' if d.good else '未过'}"
+        )
+        self.tbl_rdss.setRowCount(len(d.beams))
+        for r, b in enumerate(d.beams):
+            ok = b.s2c is not None and b.s2c > 40
+            vals = [b.bid, b.s2c, "是" if ok else ""]
+            color = QColor("#d5f5e3") if ok else QColor("#fadbd8")
+            for c, val in enumerate(vals):
+                it = QTableWidgetItem("" if val is None else str(val))
+                it.setBackground(QBrush(color))
+                self.tbl_rdss.setItem(r, c, it)
+
     def _append_log(self, tag: str, text: str, kind: str = "log") -> None:
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         colors = {
@@ -721,5 +892,6 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802
         self._poll_timer.stop()
         self._expire_timer.stop()
+        self._radio_timer.stop()
         self._link.close()
         super().closeEvent(event)

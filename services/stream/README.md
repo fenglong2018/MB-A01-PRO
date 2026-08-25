@@ -3,6 +3,11 @@
 统一管理 **cli / gnss / rdss** 逻辑通道：运行时开关、透传出口预留。  
 与物理 USB 口数量无关；以后多 CDC 时只改 `stream_set_sink()` 绑定。
 
+流程图：[`flow.md`](flow.md)。
+
+> **变更记录（2026-08-19）**  
+> 透传时 MODE 静音 CDC ulog（见 [`../log/README.md`](../log/README.md)）。通道开关仍只走 `stream.set` → `mode_passthru_set`。
+
 ## 通道定义
 
 `config/stream_ports.h`：
@@ -30,7 +35,10 @@ stream_list_json(buf, buflen);
 ## 与 JSON CLI 的关系
 
 PC 侧用 `stream.list` / `stream.set` / `stream.get`（见 `services/cli/README.md`）。  
-真正透传数据 **不要** 包进 JSON，应走 `stream_write` → sink（独立 CDC 或帧通道）。
+真正透传数据 **不要** 包进 JSON：模块 UART → `stream_write` → USB CDC（与 CLI 同一 COM）。PC 发非 `{` 行 → 模块 UART；以 `{` 开头的行仍是 CLI（用来 `stream.set` 退出）。  
+进 `PASSTHRU` 后 CDC ulog 默认静音，COM 上主要是模块句；退出后日志恢复。需要透传时仍看 ulog：先 `log.cdc` `passthru_mute:0`。
+
+上板步骤见 [`docs/board_bringup.md`](../../docs/board_bringup.md)。
 
 ## GNSS / RDSS 接入步骤（预留）
 

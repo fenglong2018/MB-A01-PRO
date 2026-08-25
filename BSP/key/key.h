@@ -26,16 +26,19 @@ extern "C" {
 #define KEY_FILTER_CNT          8
 #endif
 /**
- * SOS：连续有效计数。
+ * SOS：连续有效计数（单位 KEY_POLL_MS）。
  * - 达 SOS_LONG_CNT → 仅长按
- * - 未达长按前无效且 hit∈[SOS_SHORT_CNT, SOS_LONG_CNT) → 短按
- * - hit < SOS_SHORT_CNT 即无效 → 抖动，清零并恢复中断
+ * - 未达长按前松手且 hit∈[SOS_SHORT_CNT, SOS_LONG_CNT) → 短按
+ * - hit < SOS_SHORT_CNT 即松手 → 抖动，清零并恢复中断
+ *
+ * 长按要按人手时长给（默认 2s）；给成一两百毫秒的话正常一按就是长按，
+ * 短按窗口人手按不出来。
  */
 #ifndef SOS_SHORT_CNT
-#define SOS_SHORT_CNT           8
+#define SOS_SHORT_CNT           5       /* ≈50ms 消抖 */
 #endif
 #ifndef SOS_LONG_CNT
-#define SOS_LONG_CNT            16
+#define SOS_LONG_CNT            200     /* ≈2s */
 #endif
 
 /** pending 位图：与 board_key_id_t 对应 */
@@ -55,6 +58,12 @@ int key_init(void);
  * 非 MODE 状态；仅能力位，供 session/GNSS/RDSS 门控。
  */
 int sim_present(void);
+
+/**
+ * 有通道正在滤波（或 SOS 还按着）：1=忙。
+ * MODE 真关机前必须查：STOP2 只认沿，忙着时睡下去这次按下就丢了。
+ */
+int key_is_busy(void);
 
 #ifdef __cplusplus
 }

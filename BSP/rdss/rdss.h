@@ -68,7 +68,7 @@ int rdss_start_send(const uint8_t *payload, uint16_t len);
 
 /**
  * 阻塞查询本机卡号（TD3050：$CCICR → $BDICP 字段1）。
- * 已缓存则立即返回；成功写入内部缓存并同步 cfg device_id。
+ * 已缓存则立即返回；成功写入内部缓存并 cfg_note_bd_card（号变才落 Flash）。
  */
 int rdss_ensure_card(uint32_t timeout_ms);
 

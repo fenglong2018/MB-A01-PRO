@@ -343,7 +343,7 @@ static void on_bdicp(const char *line)
     }
 
     s_card_id = id;
-    cfg_set_device_id(id);
+    cfg_note_bd_card(id);
     rt_kprintf("[RDSS] card=%lu\n", (unsigned long)id);
 
     if (s_state == RDSS_ST_CARD_WAIT)

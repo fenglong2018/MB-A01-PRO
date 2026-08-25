@@ -6,11 +6,49 @@
 #include "cli_json.h"
 #include "cdc_io.h"
 #include "product_config.h"
+#include "mode.h"
+#if USE_GNSS
+#include "gnss.h"
+#endif
+#if USE_RDSS
+#include "rdss.h"
+#endif
 
 #include <rthw.h>
 #include <rtthread.h>
 #include <string.h>
 #include <ulog.h>
+
+static int line_is_json_cmd(const char *line)
+{
+    while ((line[0] == ' ') || (line[0] == '\t'))
+    {
+        line++;
+    }
+    return (line[0] == '{') ? 1 : 0;
+}
+
+static void passthru_downlink(const uint8_t *data, uint32_t len)
+{
+    uint8_t flags = mode_passthru_flags_get();
+
+    if ((data == RT_NULL) || (len == 0u) || (flags == 0u))
+    {
+        return;
+    }
+#if USE_GNSS
+    if (flags & MODE_PT_GNSS)
+    {
+        (void)gnss_passthru_write(data, len);
+    }
+#endif
+#if USE_RDSS
+    if (flags & MODE_PT_RDSS)
+    {
+        (void)rdss_passthru_write(data, len);
+    }
+#endif
+}
 
 static struct rt_semaphore s_rx_notice;
 static rt_uint8_t s_rx_rb[CLI_RX_RB_SIZE];
@@ -87,13 +125,21 @@ static void cli_thread_entry(void *param)
             {
                 if (line_len > 0)
                 {
-                    int n;
-
                     s_line[line_len] = '\0';
-                    n = cli_json_handle_line(s_line, s_rsp, (int)sizeof(s_rsp));
-                    if (n > 0)
+                    if ((mode_passthru_flags_get() != 0u) && !line_is_json_cmd(s_line))
                     {
-                        (void)cdc_acm_write((const uint8_t *)s_rsp, (uint32_t)n);
+                        static const uint8_t crlf[2] = {'\r', '\n'};
+
+                        passthru_downlink((const uint8_t *)s_line, (uint32_t)line_len);
+                        passthru_downlink(crlf, 2u);
+                    }
+                    else
+                    {
+                        int n = cli_json_handle_line(s_line, s_rsp, (int)sizeof(s_rsp));
+                        if (n > 0)
+                        {
+                            (void)cdc_acm_write((const uint8_t *)s_rsp, (uint32_t)n);
+                        }
                     }
                     line_len = 0;
                 }

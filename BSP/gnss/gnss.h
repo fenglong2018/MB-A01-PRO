@@ -49,7 +49,8 @@ typedef struct
     uint8_t  quality;    /* GGA quality */
     uint8_t  satellites;
     uint8_t  valid;      /* 1=有有效缓存 */
-    char     utc[11];    /* "hhmmss.ss" 或截断 */
+    char     utc[11];    /* GGA "hhmmss.ss" 或截断 */
+    uint32_t unix_sec;   /* RMC 日期+时刻合成的 UTC Unix；无合法 RMC 则为 0 */
 } gnss_fix_t;
 
 typedef struct

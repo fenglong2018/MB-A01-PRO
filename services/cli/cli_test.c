@@ -8,6 +8,7 @@
 #include "mode.h"
 #include "session_alarm.h"
 #include "board_pins.h"
+#include "cfg.h"
 
 #include <rtthread.h>
 #include <rtdevice.h>
@@ -102,6 +103,7 @@ static const char *mode_name(mode_state_t st)
     case MODE_ST_FORCE_OFF: return "FORCE_OFF";
     case MODE_ST_PASSTHRU:  return "PASSTHRU";
     case MODE_ST_LOW_BATT:  return "LOW_BATT";
+    case MODE_ST_FAKE_OFF:  return "FAKE_OFF";
     default:                return "?";
     }
 }
@@ -170,13 +172,18 @@ int cli_test_handle(const char *cmd, const char *line, int id, char *rsp, int rs
         return rsp_err(rsp, rsp_size, id, "not_built");
 #else
         adc_bat_sample_t s;
+        adc_bat_request();
+        (void)adc_bat_sample_wait(ADC_BAT_SAMPLE_WAIT_MS);
         if (adc_bat_read(&s) != 0 || !s.valid)
         {
             return rsp_err(rsp, rsp_size, id, "not_ready");
         }
         snprintf(tmp, sizeof(tmp),
-                 "\"pct\":%u,\"mv\":%u,\"vdda\":%u,\"level\":%d,\"level_name\":\"%s\"",
-                 (unsigned)s.percent, (unsigned)s.vbat_mv, (unsigned)s.vdda_mv,
+                 "\"pct\":%u,\"mv\":%u,\"lookup_mv\":%u,\"vpin\":%u,\"vdda\":%u,"
+                 "\"charge\":%u,\"offset_mv\":%u,\"level\":%d,\"level_name\":\"%s\"",
+                 (unsigned)s.percent, (unsigned)s.vbat_mv, (unsigned)s.v_lookup_mv,
+                 (unsigned)s.vpin_mv, (unsigned)s.vdda_mv, (unsigned)s.charging,
+                 (unsigned)cfg_get_charge_offset_mv(),
                  (int)s.level, lvl_name((int)s.level));
         return rsp_ok(rsp, rsp_size, id, tmp);
 #endif
@@ -244,11 +251,12 @@ int cli_test_handle(const char *cmd, const char *line, int id, char *rsp, int rs
         }
         snprintf(tmp, sizeof(tmp),
                  "\"fix_ok\":%u,\"reason\":%u,\"valid\":%u,\"lat_e7\":%ld,\"lon_e7\":%ld,"
-                 "\"alt_dm\":%d,\"sats\":%u,\"q\":%u,\"utc\":\"%.10s\"",
+                 "\"alt_dm\":%d,\"sats\":%u,\"q\":%u,\"utc\":\"%.10s\",\"unix\":%lu",
                  (unsigned)msg.ok, (unsigned)msg.reason, (unsigned)msg.fix.valid,
                  (long)msg.fix.lat_e7, (long)msg.fix.lon_e7,
                  (int)msg.fix.alt_dm, (unsigned)msg.fix.satellites,
-                 (unsigned)msg.fix.quality, msg.fix.utc);
+                 (unsigned)msg.fix.quality, msg.fix.utc,
+                 (unsigned long)msg.fix.unix_sec);
         return rsp_ok(rsp, rsp_size, id, tmp);
 #endif
     }

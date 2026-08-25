@@ -1,15 +1,26 @@
 /**
  * @file stream.c
- * @brief stream 骨架：cli 已建成；gnss/rdss 随 USE_* 与 sink 填充
+ * @brief stream：cli 控制面；gnss/rdss 透传出口接到 USB CDC
  */
 #include "stream.h"
 #include "stream_ports.h"
 #include "product_config.h"
 #include "mode.h"
+#if USE_USB_CDC
+#include "cdc_io.h"
+#endif
 
 #include <rtthread.h>
 #include <stdio.h>
 #include <string.h>
+
+#if USE_USB_CDC
+static int stream_cdc_sink(const uint8_t *data, uint32_t len)
+{
+    (void)cdc_acm_write(data, len);
+    return STREAM_OK;
+}
+#endif
 
 typedef struct
 {
@@ -55,6 +66,14 @@ static stream_item_t *stream_find(const char *name)
 
 int stream_init(void)
 {
+#if USE_USB_CDC
+#if USE_GNSS
+    (void)stream_set_sink(STREAM_NAME_GNSS, stream_cdc_sink);
+#endif
+#if USE_RDSS
+    (void)stream_set_sink(STREAM_NAME_RDSS, stream_cdc_sink);
+#endif
+#endif
     return STREAM_OK;
 }
 

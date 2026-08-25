@@ -5,14 +5,18 @@
  * SOS：短按/长按互斥；滤波中断一次无效则清零并恢复中断。
  * FALL：连续有效 KEY_FILTER_CNT 次确认。
  * USB：双沿；连续稳定 KEY_FILTER_CNT 次后按电平报 USB_IN/USB_OUT。
- * SIM：双沿；低=有卡 高=无卡；仅日志 + sim_present()，不进 MODE。
+ * SIM：双沿；低=有卡 高=无卡；更新 sim_present()，插拔投 MODE_EVT_SIM（假关机灯）。
  */
 #include <rtthread.h>
 #include <rthw.h>
 #include "config.h"
 #include "key.h"
 #include "board_pins.h"
+#include "board_gpio.h"
 #include "mode.h"
+#if USE_PM
+#include "pm.h"
+#endif
 
 #if USE_KEY
 
@@ -54,13 +58,15 @@ static struct rt_thread s_key_thread;
 static rt_uint8_t s_key_stack[KEY_THREAD_STACK];
 
 static sos_st_t s_sos_st;
-static rt_uint8_t s_sos_hit;
+static rt_uint16_t s_sos_hit;
 static rt_uint8_t s_sos_long_done;
+static uint8_t s_sos_boot_press;
 
 static key_filter_t s_fall_flt;
 static usb_filter_t s_usb_flt;
 static usb_filter_t s_sim_flt;
 static volatile int s_sim_present = 0; /* 1=有卡（低） */
+static uint8_t s_pm_key;               /* 滤波期间禁止 STOP0，否则 10ms 轮询冻住 */
 
 static rt_base_t key_id_to_pin(board_key_id_t id)
 {
@@ -91,6 +97,7 @@ static void sos_rearm(void)
     s_sos_st = SOS_ST_IDLE;
     s_sos_hit = 0;
     s_sos_long_done = 0;
+    s_sos_boot_press = 0;
 }
 
 static void sos_on_short(void)
@@ -307,11 +314,13 @@ static void sim_sample_poll(void)
         {
             s_sim_present = 1;
             rt_kprintf("[KEY] SIM_IN (card present)\n");
+            mode_post_event(MODE_EVT_SIM);
         }
         else
         {
             s_sim_present = 0;
             rt_kprintf("[KEY] SIM_OUT (no card)\n");
+            mode_post_event(MODE_EVT_SIM);
         }
         s_sim_flt.last_lvl = s_sim_flt.target_lvl;
     }
@@ -390,6 +399,16 @@ static void sos_sample_poll(void)
 
     if (!active)
     {
+        if (s_sos_boot_press)
+        {
+            /* 叫醒那一次：MODE 已进 BATT，松手不是第二次短按 */
+            s_sos_boot_press = 0;
+            if (!s_sos_long_done)
+            {
+                sos_rearm();
+                return;
+            }
+        }
         if (!s_sos_long_done &&
             (s_sos_hit >= SOS_SHORT_CNT) &&
             (s_sos_hit < SOS_LONG_CNT))
@@ -400,7 +419,7 @@ static void sos_sample_poll(void)
         return;
     }
 
-    if (s_sos_hit < 0xFF)
+    if (s_sos_hit < 0xFFFFu)
     {
         s_sos_hit++;
     }
@@ -409,6 +428,71 @@ static void sos_sample_poll(void)
         s_sos_long_done = 1;
         sos_on_long();
         s_sos_st = SOS_ST_WAIT_REL;
+    }
+}
+
+int key_is_busy(void)
+{
+    if (s_key_pending != 0u)
+    {
+        return 1;
+    }
+    if ((s_sos_st != SOS_ST_IDLE) || (s_fall_flt.st != FLT_ST_IDLE))
+    {
+        return 1;
+    }
+    if ((s_usb_flt.st != FLT_ST_IDLE) || (s_sim_flt.st != FLT_ST_IDLE))
+    {
+        return 1;
+    }
+    /* 按着不放也算忙：睡下去就没有新的下降沿了 */
+    if (sos_is_active())
+    {
+        return 1;
+    }
+    return 0;
+}
+
+static void key_pm_sync(void)
+{
+#if USE_PM
+    int busy = key_is_busy();
+
+    if (busy && !s_pm_key)
+    {
+        pm_lock();
+        s_pm_key = 1;
+    }
+    else if (!busy && s_pm_key)
+    {
+        pm_unlock();
+        s_pm_key = 0;
+    }
+#endif
+}
+
+/**
+ * 还按着才进 SAMPLE：只认长按。已松开的 SOS 由 MODE 直接进 BATT。
+ */
+static void key_take_boot_level(void)
+{
+    int sos_down = board_boot_sos_down();
+    int fall_on  = board_boot_fall_active();
+
+    if (sos_down)
+    {
+        rt_pin_irq_enable(SOS_KEY_RT_PIN, PIN_IRQ_DISABLE);
+        s_sos_st = SOS_ST_SAMPLE;
+        s_sos_hit = SOS_SHORT_CNT;
+        s_sos_long_done = 0;
+        s_sos_boot_press = 1;
+        rt_kprintf("[KEY] SOS held at reset (long only)\n");
+    }
+    if (fall_on)
+    {
+        rt_pin_irq_enable(FALL_KEY_RT_PIN, PIN_IRQ_DISABLE);
+        flt_enter(&s_fall_flt);
+        rt_kprintf("[KEY] FALL active at reset\n");
     }
 }
 
@@ -430,6 +514,7 @@ static void key_thread_entry(void *param)
         usb_sample_poll();
         sim_sample_poll();
         fall_sample_poll(&s_fall_flt);
+        key_pm_sync();
     }
 }
 
@@ -480,6 +565,10 @@ int key_init(void)
 
     rt_sem_init(&s_key_sem, "key", 0, RT_IPC_FLAG_FIFO);
 
+    /* 必须在 key 线程起来之前置好，MODE 才能在首次 maybe_stop2 时看到「忙」 */
+    key_take_boot_level();
+    key_pm_sync();
+
     err = rt_thread_init(&s_key_thread,
                          "key",
                          key_thread_entry,
@@ -516,6 +605,11 @@ int key_init(void)
 int sim_present(void)
 {
     return 1; /* 无 KEY 模块时不挡会话 */
+}
+
+int key_is_busy(void)
+{
+    return 0;
 }
 
 #endif /* USE_KEY */

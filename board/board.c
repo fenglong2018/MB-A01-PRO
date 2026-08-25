@@ -38,7 +38,10 @@
 
 #include "n32wb452.h"
 #include "bsp.h"
+#include "board_gpio.h"
 #include "log.h"
+#include "misc.h"
+#include "product_config.h"
 
 /**
  * @brief  Configures Vector Table base location.
@@ -73,25 +76,24 @@ void SysTick_Handler(void)
  */
 void rt_hw_init()
 {
-    /* NVIC Configuration */
-    NVIC_Configuration();
+    /* 时钟已由 SystemInit 起来；先关电源轨 */
+    board_gpio_early_init();
 
-    /* Configure the SysTick */
-    SysTick_Config(SystemCoreClock / RT_TICK_PER_SECOND);   /* 10ms */
-    
+    NVIC_Configuration();
+    /* 与旧透传工程一致：4 位抢占 */
+    NVIC_PriorityGroupConfig(NVIC_PriorityGroup_4);
+
+    SysTick_Config(SystemCoreClock / RT_TICK_PER_SECOND);
+
 #ifdef RT_USING_HEAP
-    /* init memory system */
     rt_system_heap_init((void *)n32wb452_SRAM_START, (void *)n32wb452_SRAM_END);
-#endif //RT_USING_HEAP
-    
-    /* Call components board initial (use INIT_BOARD_EXPORT()) */
+#endif
+
 #ifdef RT_USING_COMPONENTS_INIT
     rt_components_board_init();
 #endif
 
-#ifdef RT_USING_CONSOLE
-    rt_console_set_device(RT_CONSOLE_DEVICE_NAME);
-#endif
+    /* 不 rt_console_set_device("usart1")：PA9 是 GNSS LNA 使能。 */
 }
 
 /*@}*/

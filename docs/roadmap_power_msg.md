@@ -1,6 +1,9 @@
 # 电源 / 模式 / 报文 — 规划（含未实现项）
 
-本文记录已确认规则与后续工作。`FORCE_OFF` / `LOW_BATT` / ALARM·ON 报文节奏已接入；假关机预留空。
+本文记录已确认规则与后续工作。
+
+> **变更记录（2026-08-18）**  
+> STOP2 / RTC 10s / 硬件 IWDG **已接代码**。`LOW_BATT` 扩展到 OFF/看电；冷启动 WARN 发 1 条，BKP `lb_sent` 防 STOP2 重复发。告警不插 N。FAKE_OFF 10s 空载采 ADC。板级电流仍待测。
 
 ---
 
@@ -9,7 +12,7 @@
 ### 分压
 
 ```text
-BAT -- R16(1.2M) --+-- AD_BAT (PA4 / ADC_CH_4)
+BAT -- R16(1.2M) --+-- AD_BAT (PA4 / ADC2 CH1)
                    |
                  R17(3.3M)
                    |
@@ -26,15 +29,26 @@ BAT -- R16(1.2M) --+-- AD_BAT (PA4 / ADC_CH_4)
 - 上电：`ADC_StartCalibration`（芯片自校准）
 - 采内部 `ADC_CH_INT_VREF`（CH18，标称 **1.2V**）算实际 VDDA  
   `VDDA_mV = 1200 × 4095 / raw_vref`
-- 再用 VDDA 与 AD_BAT 码值算电芯电压
+- 再用 **ADC1 VREFINT** 算 VDDA，**ADC2 CH1（PA4）** 码值还原电芯电压
+
+### 采集节奏
+
+- 上电：自校准 + **空载采 1 次**
+- 之后：**通知采集**。MODE：`BATT` / 进 `CHARGE` / `FAKE_OFF` RTC 10s；SESSION：开 GNSS 前
+- 拔 USB、透传、`OFF`/`FORCE_OFF`：**不采**（CHARGE 退出后第一拍 SESSION 用缓存）
+
+### 充电补偿
+
+- 同一张 OCV 表；充电且 \(V&lt;4.18\mathrm{V}\)：`V_lookup = V_meas - charge_offset_mv`（默认 100mV，JSON `cfg.charge_offset_mv`）
+- \(V\ge 4.18\mathrm{V}\) 不再减 offset
 
 ### DMA？
 
 | 方案 | 结论 |
 |------|------|
-| `ADC1_DMA` 连续扫 | **本期不做**。只需 2 通道、约 1Hz 周期采样，软件触发单次转换足够 |
-| RT-Thread `drv_adc` 注册 | **本期不用**。未开 `RT_USING_ADC`；产品侧自管 ADC1，与 KEY 风格一致 |
-| 独立任务 | **要**。低优先级线程周期采集，不阻塞 MODE/KEY |
+| `ADC1_DMA` 连续扫 | **不做**。事件触发、两通道软件转换足够 |
+| RT-Thread `drv_adc` 注册 | **不用**。未开 `RT_USING_ADC`；产品侧自管 ADC1 |
+| 独立任务 | **要**。阻塞等通知，不空转 |
 
 实现目录：`BSP/adc/`（`adc_bat.c/h`）。
 
@@ -52,6 +66,8 @@ ADC码值 → Vbat(mV) → OCV表[101] → percent(0..100) → level → MODE
 
 上层只读 `adc_bat_get_percent()` / `adc_bat_get_level()`。
 
+**上位机：** MBA01 电量仍 2 位 `00`～`99`，协议不用改。`tools/host_pc` V0.2 可改 `charge_offset_mv`。详见 `BSP/adc/README.md`、`tools/host_pc/README.md`。
+
 ---
 
 ## 2. 模式扩展
@@ -59,8 +75,8 @@ ADC码值 → Vbat(mV) → OCV表[101] → percent(0..100) → level → MODE
 | 状态 | 含义 | 状态 |
 |------|------|------|
 | `FORCE_OFF` | 低压强制关机；仅 USB→`CHARGE` 解除 | **已实现**（见 `fsm.md`） |
-| `LOW_BATT` | 低电量告警；只发一条短报文 | **已实现**（ON + WARN 边沿） |
-| `SLEEP` | 假关机 | **预留空，不实施** |
+| `LOW_BATT` | 低电量告警；只发一条短报文 | **已实现**（ON / FAKE_OFF←ON / OFF / 关机看电；告警不进；`lb_sent`） |
+| `FAKE_OFF` | 假关机（发完一拍；resume=ON/ALARM） | **已实现**（STOP0 + RTC 10s 闪灯/采电） |
 
 ### `FORCE_OFF` 行为（已实现）
 
@@ -71,38 +87,29 @@ ADC码值 → Vbat(mV) → OCV表[101] → percent(0..100) → level → MODE
 
 ---
 
-## 3. 报文调度（后续，先框架/空实现）
+## 3. 报文调度（已实现）
 
 | 场景 | 规则 |
 |------|------|
 | `LOW_BATT` | 进入后发 **1 条** 短报文 |
-| `ALARM`（应急） | 进告警 **立刻** 定位/发信 1 次；**0～24h 每 2 分钟**；**24～48h 每 5 分钟**；满 **48h** 切回 **`ON`** |
+| `ALARM`（应急） | 进告警 **立刻** 1 次；**0～24h / 2min**；**24～48h / 5min**；**48h 起 / 10min**；满 **72h 仍停 ALARM**（报文 A；墙钟 Unix；未校时一直 2min） |
 | `ON` | 每 **10 分钟** 定位 + 常态报文 |
 
-GNSS 细则与状态图：`BSP/gnss/README.md`。
-
-建议落点：
-
-```text
-app/session/session_msg.h/.c     # 调度框架（定时器 + 回调空实现）
-app/session/session_alarm.*      # 已有告警会话启停；报文节奏挂这里或 msg
-BSP/rdss / services              # 真正组包发送（后接）
-```
-
-第一期：接口 + 日志 `[MSG] stub ...`，不发空中报文。
+实现：`app/session/session_alarm.*` + `msg_pack.*`。无 SIM 本拍空过；透传 / `test.*` 不查卡。
 
 ---
 
-## 4. 低功耗 STOP2 + 假关机（方案已记录，未实施）
+## 4. 低功耗 STOP2 + 假关机
 
 完整方案：**[`docs/low_power_stop2.md`](low_power_stop2.md)**
 
 | 要点 | 内容 |
 |------|------|
-| 休眠 | MCU **STOP2**；只保 MODE + 告警时间轴 + RTC/配置 |
-| 假关机 | 新状态 **`SLEEP`**（勿与真 `OFF` 合并）；ALARM/ON 发完进入 |
-| 唤醒 | RTC Alarm + KEY/USB EXTI；醒后冷恢复/软件复位再按态重跑 |
-| 现状 | **仅文档**；代码未动 |
+| 逻辑 `FAKE_OFF` | **已接**：一拍结束进假关机；`SHOT_BUSY` 醒跑 GNSS/RDSS |
+| idle STOP0 | **已接** |
+| RTC 10s 浅醒 | **已接**（闪灯 + FAKE_OFF 空载采电） |
+| STOP2 真关机 | **已接代码**（OFF/FORCE_OFF；醒后复位） |
+| 硬件 IWDG | **已接**；非 OFF/FORCE_OFF 开，超时 ≈26s |
 
 ---
 
@@ -113,18 +120,27 @@ BSP/rdss / services              # 真正组包发送（后接）
 | A | `BSP/adc` 采集 / 校准 / 滤波 / level API + 任务 | **完成** |
 | B | MODE：`FORCE_OFF`、保护拦截、`BATT` 禁开机 | **完成** |
 | C | `LOW_BATT` 状态 + 单次短报文 | **完成** |
-| D | `ALARM` 2/5min + `ON` 10min 会话 | **完成**（锚点仍为 tick；假关机不做） |
-| E | BATT/LED 电量显示接 ADC 百分比 | **完成**（`BSP/led`） |
+| D | `ALARM` 2/5/10min + `ON` 10min（满 72h 不切 ON） | **完成** |
+| D3 | GNSS RMC → RTC（ON 一次；ALARM 仅未校时） | **完成** |
+| D4 | 逻辑 `FAKE_OFF` + 告警短按看电 | **完成** |
+| E | BATT/LED 电量显示接 ADC 百分比 | **完成**（ON 100ms / ALARM 双闪） |
 | F | `BSP/gnss` 正常定位 / 透传 / 结果 mq | **完成** |
-| G | RDSS 真实发信 | **基本完成** |
-| H0 | 低功耗：idle hook + STOP0（`BSP/pm`） | **完成**（浅睡；SysTick 仍约 10ms 醒） |
-| H | 低功耗：`SLEEP` + RTC Alarm + STOP2 | **方案已写**，待实施 |
+| G | RDSS 真实发信 | **基本完成**（`$BDICP` → `cfg_note_bd_card`） |
+| H0 | 低功耗：idle hook + STOP0（`BSP/pm`） | **完成** |
+| H1 | RTC 10s 浅醒 + FAKE_OFF 采电 | **完成**（2026-08-18） |
+| H | STOP2：真 OFF/FORCE_OFF + IWDG | **代码完成**（2026-08-18）；电流待测 |
+| H2 | 冷启动 OFF+WARN 发 1 条 N + `lb_sent` | **完成**（2026-08-18） |
+| 调试 | 透传 USB 桥（`stream_set_sink` + CDC 下行） | **已接**；与 CLI 同一 COM |
+| 调试 | 透传时 CDC ulog 静音 | **已接**（MODE hold；`log.cdc` RAM 覆盖，不进 cfg） |
+| 调试 | CLI `io.*` 真实 GPIO | **未接**（`not_ready`） |
 
 ---
 
 ## 6. 相关文件
 
 - 现行状态机：`app/mode/fsm.md`
+- 三套库：`BSP/nvflash/README.md`
 - 本规划：`docs/roadmap_power_msg.md`
 - 低功耗方案：`docs/low_power_stop2.md`
+- RTC / GNSS 校时：`BSP/rtc/README.md`、`BSP/gnss/README.md`
 - ADC：`BSP/adc/`

@@ -29,12 +29,12 @@ int stream_is_enabled(const char *name);
 int stream_is_built(const char *name);
 
 /**
- * 驱动侧把收到的原始数据交给 stream（透传到主机）。
- * 骨架阶段无 sink 时返回 STREAM_ERR_NO_SINK。
+ * 驱动侧把收到的原始数据交给 stream（透传到主机 USB CDC）。
+ * 无 sink 时返回 STREAM_ERR_NO_SINK。
  */
 int stream_write(const char *name, const uint8_t *data, uint32_t len);
 
-/** 以后接独立 CDC/帧通道时注册；传 NULL 清除 */
+/** 默认在 stream_init 接到 cdc_acm_write；传 NULL 清除 */
 int stream_set_sink(const char *name, stream_sink_fn sink);
 
 /**

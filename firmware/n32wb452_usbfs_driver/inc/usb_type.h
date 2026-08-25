@@ -36,6 +36,7 @@
 #define __USB_TYPE_H__
 
 #include "usb_conf.h"
+#include <stdint.h>
 #include <stdbool.h>
 
 /**

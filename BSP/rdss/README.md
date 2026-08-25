@@ -1,7 +1,12 @@
 # RDSS
 
+> **变更记录（2026-08-18）**  
+> 本模块协议未改。`LOW_BATT` 走既有 `rdss_start_send` 发 1 条 N（含 OFF 冷启动 WARN）。告警拍不被低电打断。
+
 北斗短报文（TD3050 / USART2 PB4/PB5 remap）。引脚见 `board/board_pins.h`。
 协议见 `TD3050接口协议20241201.pdf`。
+
+流程图与 CLI：[`flow.md`](flow.md)。
 
 ## 开关
 
@@ -16,9 +21,9 @@
 | 波束超时 | 30s；FKI 等待 15s |
 | PA | 有效波束后再开；`cfg.pa_enable` 默认 **0** |
 | 收信地址 | `cfg.recv_id` 默认 `13500001` |
-| 本机卡号 | `$CCICR,0,00*68` → `$BDICP` **字段1 用户地址(ID)**；缓存并同步 `cfg.device_id` |
+| 本机卡号 | `$BDICP` 字段1 → `cfg_note_bd_card`（变了才进 Flash 4 槽）；**不改** `device_id` |
 | 发成功 | 关 PA / PRDSS / LNA_RDSS + PLNA release |
-| 无卡 | 不启会话发信；仅日志（KEY 双沿滤波） |
+| 无卡 | 产品 SESSION 不启 GNSS/RDSS（不开电）；拍中拔卡不中断；**透传不查卡**；透传时 CDC ulog 由 MODE 静音 |
 | 电源极性 | PLNA/LNA_RDSS 高开；PRDSS/EN_5V 低开 |
 
 ## API
@@ -31,9 +36,9 @@
 
 ```text
 BSP/key       SIM → sim_present()
-services/cfg  recv_id / pa_enable / device_id + JSON cfg.*
+services/cfg  身份 Flash；`$BDICP` → cfg_note_bd_card
 BSP/rdss      电源 / PWI / PA / CCICR|BDICP / CCTCQ|FKI
-app/session   有卡 → GNSS → ensure_card → msg_pack → RDSS
+app/session   有卡 → GNSS → ensure_card → msg_pack → RDSS；不校 RTC
 ```
 
 ## JSON 示例

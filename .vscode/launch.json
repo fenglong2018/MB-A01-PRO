@@ -1,0 +1,35 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "J-Link (WSL)",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/User.elf",
+            "request": "launch",
+            "type": "cortex-debug",
+            "servertype": "jlink",
+            "device": "N32WB452CE",
+            "interface": "swd",
+            "runToEntryPoint": "Reset_Handler",
+            "gdbPath": "/usr/bin/gdb-multiarch",
+            "armToolchainPath": "/usr/bin",
+            "serverpath": "/usr/bin/JLinkGDBServerCLExe",
+            "jlinkscript": "${workspaceFolder}/tools/jlink/connect_under_reset.JLinkScript",
+            "preLaunchTask": "make all"
+        },
+        {
+            "name": "J-Link (Windows)",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/User.elf",
+            "request": "launch",
+            "type": "cortex-debug",
+            "servertype": "jlink",
+            "device": "N32WB452CE",
+            "interface": "swd",
+            "runToEntryPoint": "Reset_Handler",
+            "serverpath": "C:/Program Files/SEGGER/JLink/JLinkGDBServerCL.exe",
+            "jlinkscript": "${workspaceFolder}/tools/jlink/connect_under_reset.JLinkScript",
+            "preLaunchTask": "make all"
+        }
+    ]
+}

@@ -21,6 +21,9 @@ void pwr_plna_release(void);
 
 uint8_t pwr_plna_refcount(void);
 
+/** 关机：引用计数清零并拉低脚（与 board_gpio_outputs_off 一起用） */
+void pwr_plna_force_off(void);
+
 #ifdef __cplusplus
 }
 #endif

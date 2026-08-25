@@ -425,8 +425,7 @@ static rt_err_t n32wb452_control(struct rt_serial_device *serial, int cmd, void 
     struct n32wb452_uart *uart;
     NVIC_InitType NVIC_InitStructure;
 
-    /* Configure the NVIC Preemption Priority Bits */
-    NVIC_PriorityGroupConfig(NVIC_PriorityGroup_0);
+    /* 全局分组在 rt_hw_init 已设 Group_4，此处改分组会打乱 USB 中断 */
 
     RT_ASSERT(serial != RT_NULL);
     uart = (struct n32wb452_uart *)serial->parent.user_data;

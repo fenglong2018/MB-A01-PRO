@@ -77,3 +77,17 @@ uint8_t pwr_plna_refcount(void)
 {
     return s_ref;
 }
+
+void pwr_plna_force_off(void)
+{
+    if (!s_inited)
+    {
+        PIN_WRITE(EN_PLNA_POW_PORT, EN_PLNA_POW_PIN, EN_PLNA_POW_OFF_LEVEL);
+        return;
+    }
+
+    rt_mutex_take(&s_lock, RT_WAITING_FOREVER);
+    s_ref = 0;
+    PIN_WRITE(EN_PLNA_POW_PORT, EN_PLNA_POW_PIN, EN_PLNA_POW_OFF_LEVEL);
+    rt_mutex_release(&s_lock);
+}

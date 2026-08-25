@@ -7,9 +7,12 @@
 
 #include "n32wb452_pwr.h"
 #include "n32wb452_rcc.h"
+#include "n32wb452_bkp.h"
+#include "n32wb452.h"
 #include "product_config.h"
 #include "pm.h"
 #include "board_clock.h"
+#include "board_gpio.h"
 
 #if USE_PM
 
@@ -56,13 +59,14 @@ static void pm_idle_hook(void)
 {
     rt_base_t level;
 
-    if (s_lock != 0u)
+    /* STOP0 停 PLL，USB 48M(PLL/3) 不能单独留；有线则整段不睡 */
+    if ((s_lock != 0u) || board_usb_inserted())
     {
         return;
     }
 
     level = rt_hw_interrupt_disable();
-    if (s_lock != 0u)
+    if ((s_lock != 0u) || board_usb_inserted())
     {
         rt_hw_interrupt_enable(level);
         return;
@@ -94,6 +98,48 @@ static int app_pm_init(void)
 }
 INIT_APP_EXPORT(app_pm_init);
 
+static uint32_t s_rram_stk[64] __attribute__((section(".rram"), used));
+#define PM_WAKE_BKP_MAGIC       BOARD_STOP2_WAKE_MAGIC
+
+__attribute__((noinline, noreturn))
+static void pm_stop2_on_rram(void)
+{
+    RCC_EnableAPB1PeriphClk(RCC_APB1_PERIPH_PWR, ENABLE);
+    PWR->CTRL2 |= (uint16_t)(PWR_CTRL2_STOP2S | PWR_CTRL2_SR2VBRET | PWR_CTRL2_SR2STBRET);
+    PWR_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
+    /*
+     * RETRAM 在软件复位后不可靠。BKP 跨复位还在。
+     * 只盖戳，短/长由复位后 KEY 轮询。须在 RTC 可能 BackupReset 之前被 early_init 读走。
+     */
+    RCC_EnableAPB1PeriphClk(RCC_APB1_PERIPH_PWR | RCC_APB1_PERIPH_BKP, ENABLE);
+    PWR_BackupAccessEnable(ENABLE);
+    BKP_WriteBkpData(BKP_DAT42, PM_WAKE_BKP_MAGIC);
+    NVIC_SystemReset();
+    while (1)
+    {
+    }
+}
+
+void pm_stop2_enter(void)
+{
+    uint32_t top = (uint32_t)&s_rram_stk[64];
+
+    rt_kprintf("[PM] STOP2 (true off)\n");
+    __disable_irq();
+    /* kprintf 期间 LED 线程可能又点亮；关中断后再拉灭，STOP2 保持此电平 */
+    board_gpio_outputs_off();
+    __asm volatile(
+        "msr msp, %0\n"
+        "msr psp, %0\n"
+        "bx  %1\n"
+        :
+        : "r"(top), "r"(pm_stop2_on_rram)
+        : "memory");
+    while (1)
+    {
+    }
+}
+
 #else /* !USE_PM */
 
 void pm_lock(void)
@@ -112,6 +158,10 @@ uint32_t pm_lock_count(void)
 int pm_idle_hook_install(void)
 {
     return 0;
+}
+
+void pm_stop2_enter(void)
+{
 }
 
 #endif /* USE_PM */

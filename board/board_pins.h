@@ -38,12 +38,13 @@ extern "C" {
 /* Pin11 PA4  AD_BAT  模拟输入  电池电压采样
  * 分压：BAT -- R16(1.2M) -- AD_BAT -- R17(3.3M) -- GND
  * Vbat = Vpin * (R16+R17)/R17 = Vpin * 15/11
- * 内部基准：ADC_CH_INT_VREF (CH18, 1.2V) 用于算 VDDA
+ * N32WB452：PA4 只在 ADC2 CH1；ADC1 CH4 是 PA3。VDDA 仍用 ADC1 内部 1.2V。
  */
 #define BAT_ADC_BAT_PORT               GPIOA
 #define BAT_ADC_BAT_PIN                GPIO_PIN_4
 #define BAT_ADC_BAT_CLK                RCC_APB2_PERIPH_GPIOA
-#define BAT_ADC_BAT_ADC_CH             ADC_CH_4
+#define BAT_ADC_BAT_ADC                ADC2
+#define BAT_ADC_BAT_ADC_CH             ADC2_Channel_01_PA4
 #define BAT_DIV_R16_OHM                1200000u
 #define BAT_DIV_R17_OHM                3300000u
 
@@ -56,13 +57,14 @@ extern "C" {
 #define RD_BD_SIMCARD_CLK            RCC_APB2_PERIPH_GPIOA
 #define RD_BD_SIMCARD_RT_PIN         5   /* PA5 */
 
-/* Pin14 PA7  MCU_I_USB_IN  USB 插入检测 */
+/* Pin14 PA7  MCU_I_USB_IN  USB 插入检测（低=插入） */
 #define USB_IN_PORT               GPIOA
 #define USB_IN_PIN                GPIO_PIN_7
 #define USB_IN_CLK                RCC_APB2_PERIPH_GPIOA
 #define USB_IN_PIN_SOURCE         GPIO_PIN_SOURCE7
 #define USB_IN_PORT_SOURCE        GPIOA_PORT_SOURCE
 #define USB_IN_RT_PIN             7   /* PA7 */
+#define USB_IN_INSERTED_LEVEL     0   /* 读到此电平 = 已插入 */
 
 /* Pin20 PB12  MCU_FALL  水浸信号输入 */
 #define FALL_KEY_PORT                 GPIOB
@@ -85,7 +87,7 @@ extern "C" {
 #define EN_PLNA_POW_PIN               GPIO_PIN_8
 #define EN_PLNA_POW_CLK               RCC_APB2_PERIPH_GPIOA
 
-/* Pin28 PA9  MCU_EN_LNA_GNSS */
+/* Pin28 PA9  MCU_EN_LNA_GNSS（与模板 USART1 TX 同脚，禁止开 RT_USING_USART1） */
 #define EN_LNA_POW_GNSS_PORT          GPIOA
 #define EN_LNA_POW_GNSS_PIN           GPIO_PIN_9
 #define EN_LNA_POW_GNSS_CLK           RCC_APB2_PERIPH_GPIOA
@@ -110,6 +112,15 @@ extern "C" {
 #define EN_PRDSS_POW_PIN              GPIO_PIN_3
 #define EN_PRDSS_POW_CLK              RCC_APB2_PERIPH_GPIOB
 
+/* 关电平：1=写高关（低有效开），0=写低关（高有效开）。与 GNSS/RDSS/pwr 一致。 */
+#define EN_5V_PA_POW_OFF_LEVEL        1
+#define EN_PLNA_POW_OFF_LEVEL         0
+#define EN_LNA_POW_GNSS_OFF_LEVEL     0
+#define EN_BLE_POW_OFF_LEVEL          0
+#define EN_PGNSS_POW_OFF_LEVEL        1
+#define EN_LNA_RDSS_POW_OFF_LEVEL     0
+#define EN_PRDSS_POW_OFF_LEVEL        1
+
 /* -------------------------------------------------------------------------- */
 /* LED（电池电量指示；低电平点亮）                                            */
 /* -------------------------------------------------------------------------- */
@@ -127,6 +138,9 @@ extern "C" {
 #define LED3_PORT                 GPIOB
 #define LED3_PIN                  GPIO_PIN_2
 #define LED3_CLK                  RCC_APB2_PERIPH_GPIOB
+
+/* 低电平点亮，关=写高 */
+#define LED_OFF_LEVEL             1
 
 /* -------------------------------------------------------------------------- */
 /* UART：GNSS = USART3（PB10/PB11，默认脚，无需 remap）                        */

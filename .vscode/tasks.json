@@ -1,0 +1,18 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "make all",
+            "type": "shell",
+            "command": "pkill -x JLinkExe 2>/dev/null; pkill -x JLinkGDBServer 2>/dev/null; pkill -x JLinkGDBServerCLExe 2>/dev/null; make -j12",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"]
+        }
+    ]
+}

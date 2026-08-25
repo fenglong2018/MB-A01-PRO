@@ -1,12 +1,55 @@
 # BSP/adc — 电池电量
 
+> **变更记录（2026-08-24）**  
+> PA4 改走 **ADC2 CH1**（N32WB452：ADC1 CH4 是 PA3）。VDDA 仍用 ADC1 VREFINT。
+> 采集表增加：`FAKE_OFF` RTC 10s 空载 `request()` 1 次（不开 15s）。CHARGE 15s、拔 USB 不采、会话前 `sample_wait` 不变。  
+> 边沿：WARN→`BAT_WARN`；PROTECT→`BAT_PROTECT`；回到 OK→`BAT_OK`（MODE 清 `lb_sent`）。  
+> MODE 受理 WARN：ON / `FAKE_OFF←ON` / OFF / 关机看电；告警不进 `LOW_BATT`。
+
 ## 文件分工
+
+流程图：[`flow.md`](flow.md)。用法：`{"cmd":"test.adc"}`。
 
 | 文件 | 内容 |
 |------|------|
-| `adc_bat.h` | 宏：`ADC_BAT_PCT_NUM=101`、保护/预警百分比；API |
+| `adc_bat.h` | 宏：百分比档、保护/预警、充电压差；API |
 | `adc_bat_soc.h` | `adc_bat_ocv_mv[101]`（const，非宏）；仅 `adc_bat.c` 用 |
-| `adc_bat.c` | 采集、查表、level |
+| `adc_bat.c` | 通知采集、充电 offset、查表、level |
+
+## 采集时机
+
+上电校准后空载采 **1 次**。之后线程阻塞，被通知才采：
+
+| 来源 | 时机 |
+|------|------|
+| MODE | 进 `BATT`：`request()` |
+| MODE | 进 `CHARGE`：`set_charging(1)`（立刻采 + 15s 周期） |
+| MODE | 离 `CHARGE`（拔 USB）：`set_charging(0)`（停周期，**不采**） |
+| MODE | 进 `PASSTHRU`：`pause()`（停周期，不采） |
+| MODE | `FAKE_OFF` 的 RTC 10s：`request()` 空载 1 次（不开 15s 周期） |
+| SESSION | 开 GNSS 前 `sample_wait`；刚离开 CHARGE 的第一拍跳过 |
+
+GNSS/RDSS 工作中、透传中、KEY/LED **不采**。  
+`OFF` / `FORCE_OFF`：无周期、无采集（STOP2）。冷启动那 1 次空载采样若已是 WARN，由 MODE 决定是否发 1 条 N（BKP `lb_sent` 防 STOP2 重复）。
+
+## 充电查表
+
+仍用同一张 OCV 表。充电且端电压 &lt; 4.18V：
+
+`V_lookup = V_meas - charge_offset_mv`（cfg，默认 100mV，0=关）
+
+≥4.18V 不再减。`vbat_mv` 为真实端电压；percent/level 用 `v_lookup_mv`。
+
+标定：空载读 `test.adc` 的 `mv`，插 USB 约 2s 再读，差值写入 `cfg.charge_offset_mv`（或宏 `ADC_BAT_CHARGE_OFFSET_MV`）。
+
+## 对外影响（报文 / 上位机）
+
+| 通道 | 是否改协议 | 说明 |
+|------|------------|------|
+| MBA01 短报文 | **否** | 电量仍为头里 2 位 ASCII `00`～`99`；只是采样更贴近空载，充电虚高不进报文（CHARGE 本不发信） |
+| USB CLI / `tools/host_pc` | **加字段，旧端可忽略** | `cfg.*` 增 `charge_offset_mv`；`test.adc` 增 `lookup_mv`/`charge`/`offset_mv`。V0.2 配置页可改偏移 |
+
+配置页改充电偏移见 `tools/host_pc/README.md`（V0.2）。
 
 ## OCV 锚点（产品给定）
 

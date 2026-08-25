@@ -7,6 +7,7 @@
  */
 #include <rtthread.h>
 #include <rtdevice.h>
+#include <rthw.h>
 #include <string.h>
 #include <time.h>
 
@@ -17,6 +18,11 @@
 #include "n32wb452_pwr.h"
 #include "n32wb452_bkp.h"
 #include "n32wb452_rtc.h"
+#include "n32wb452_exti.h"
+#include "misc.h"
+#if defined(USE_IWDG) && USE_IWDG
+#include "iwdg.h"
+#endif
 
 #if USE_RTC
 
@@ -32,6 +38,8 @@ typedef struct
 static struct rt_device s_rtc_dev;
 static uint8_t s_synced;
 static uint8_t s_hw_ok;
+static rtc_wu_hook_t s_wu_hook[RTC_WU_SLOT_N];
+static uint8_t s_wu_on;
 
 static struct rt_thread s_thread;
 static rt_uint8_t s_stack[RTC_THREAD_STACK];
@@ -263,6 +271,10 @@ uint32_t rtc_get_unix(void)
 {
     time_t t = 0;
 
+    if (!rtc_is_synced())
+    {
+        return 0;
+    }
     if (rtc_get_time_t(&t) != RT_EOK)
     {
         return 0;
@@ -351,6 +363,125 @@ static int rtc_hw_setup(void)
     return 0;
 }
 
+void rtc_wu_hook_set(uint8_t slot, rtc_wu_hook_t fn)
+{
+    if (slot < RTC_WU_SLOT_N)
+    {
+        s_wu_hook[slot] = fn;
+    }
+}
+
+static void rtc_wu_wait_write(void)
+{
+    uint32_t n = 0x3FFFFu;
+
+    while ((RTC_GetFlagStatus(RTC_FLAG_WTWF) == RESET) && (n-- != 0u))
+    {
+    }
+}
+
+int rtc_wu_start(uint32_t period_s)
+{
+    EXTI_InitType exti;
+    NVIC_InitType nvic;
+    uint32_t cnt;
+
+    if (!s_hw_ok || (period_s == 0u))
+    {
+        return -1;
+    }
+    /* 已在跑则保持相位，避免假关机/再开拍把 10s 重头数 */
+    if (s_wu_on)
+    {
+        return 0;
+    }
+    cnt = period_s - 1u;
+    if (cnt > 0xFFFFu)
+    {
+        cnt = 0xFFFFu;
+    }
+
+    RTC_EnableWriteProtection(DISABLE);
+    (void)RTC_EnableWakeUp(DISABLE);
+    rtc_wu_wait_write();
+    RTC_ConfigWakeUpClock(RTC_WKUPCLK_CK_SPRE_16BITS);
+    RTC_SetWakeUpCounter(cnt);
+    RTC_ClrFlag(RTC_FLAG_WTF);
+    RTC_ClrIntPendingBit(RTC_INT_WUT);
+    RTC_ConfigInt(RTC_INT_WUT, ENABLE);
+    (void)RTC_EnableWakeUp(ENABLE);
+    RTC_EnableWriteProtection(ENABLE);
+
+    EXTI_ClrITPendBit(EXTI_LINE20);
+    EXTI_InitStruct(&exti);
+    exti.EXTI_Line    = EXTI_LINE20;
+    exti.EXTI_Mode    = EXTI_Mode_Interrupt;
+    exti.EXTI_Trigger = EXTI_Trigger_Rising;
+    exti.EXTI_LineCmd = ENABLE;
+    EXTI_InitPeripheral(&exti);
+
+    nvic.NVIC_IRQChannel                   = RTC_IRQn;
+    nvic.NVIC_IRQChannelPreemptionPriority = 1;
+    nvic.NVIC_IRQChannelSubPriority        = 1;
+    nvic.NVIC_IRQChannelCmd                = ENABLE;
+    NVIC_Init(&nvic);
+
+    s_wu_on = 1;
+    rt_kprintf("[RTC] wu start %lus\n", (unsigned long)period_s);
+    return 0;
+}
+
+void rtc_wu_stop(void)
+{
+    NVIC_InitType nvic;
+    EXTI_InitType exti;
+
+    if (!s_wu_on)
+    {
+        return;
+    }
+    RTC_EnableWriteProtection(DISABLE);
+    RTC_ConfigInt(RTC_INT_WUT, DISABLE);
+    (void)RTC_EnableWakeUp(DISABLE);
+    RTC_EnableWriteProtection(ENABLE);
+
+    nvic.NVIC_IRQChannel = RTC_IRQn;
+    nvic.NVIC_IRQChannelCmd = DISABLE;
+    nvic.NVIC_IRQChannelPreemptionPriority = 1;
+    nvic.NVIC_IRQChannelSubPriority = 1;
+    NVIC_Init(&nvic);
+
+    EXTI_InitStruct(&exti);
+    exti.EXTI_Line    = EXTI_LINE20;
+    exti.EXTI_LineCmd = DISABLE;
+    exti.EXTI_Mode    = EXTI_Mode_Interrupt;
+    exti.EXTI_Trigger = EXTI_Trigger_Rising;
+    EXTI_InitPeripheral(&exti);
+    EXTI_ClrITPendBit(EXTI_LINE20);
+    s_wu_on = 0;
+}
+
+void RTC_WKUP_IRQHandler(void)
+{
+    uint8_t i;
+
+    rt_interrupt_enter();
+    RTC_ClrIntPendingBit(RTC_INT_WUT);
+    RTC_ClrFlag(RTC_FLAG_WTF);
+    EXTI_ClrITPendBit(EXTI_LINE20);
+#if defined(USE_IWDG) && USE_IWDG
+    iwdg_feed();
+#endif
+    for (i = 0; i < RTC_WU_SLOT_N; i++)
+    {
+        if (s_wu_hook[i])
+        {
+            s_wu_hook[i]();
+        }
+    }
+    rt_interrupt_leave();
+}
+
 int rtc_hw_init(void)
 {
     rt_err_t err;
@@ -399,8 +530,8 @@ static int app_rtc_init(void)
 {
     return rtc_hw_init();
 }
-/* 需在调度器起来后跑线程：用 APP 级 init（与 key/rdss 同档） */
-INIT_APP_EXPORT(app_rtc_init);
+/* ENV：早于 mode(APP)，保证 mode_init 能读 synced/墙钟 */
+INIT_ENV_EXPORT(app_rtc_init);
 
 #else /* !USE_RTC */
 
@@ -408,5 +539,8 @@ int rtc_hw_init(void) { return 0; }
 uint32_t rtc_get_unix(void) { return 0; }
 rt_err_t rtc_post_unix(uint32_t s, uint8_t src) { (void)s; (void)src; return -RT_ERROR; }
 int rtc_is_synced(void) { return 0; }
+void rtc_wu_hook_set(uint8_t slot, rtc_wu_hook_t fn) { (void)slot; (void)fn; }
+int rtc_wu_start(uint32_t period_s) { (void)period_s; return -1; }
+void rtc_wu_stop(void) {}
 
 #endif /* USE_RTC */
