@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 /** cli_json / cli_test 临时拼装缓冲 */
-#define CLI_JSON_TMP_SIZE       512
+#define CLI_JSON_TMP_SIZE       768
 /** JSON 字段缓存长度 */
 #define CLI_JSON_CMD_MAX        32
 #define CLI_JSON_NAME_MAX       24

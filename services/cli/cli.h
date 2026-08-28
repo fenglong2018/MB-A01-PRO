@@ -20,7 +20,7 @@ extern "C" {
 /** 单行 JSON 最大长度（含结尾 0） */
 #define CLI_LINE_MAX            256
 /** 应答缓冲最大长度（含 GNSS 自检 JSON） */
-#define CLI_RSP_MAX             768
+#define CLI_RSP_MAX             1024
 /** CLI 处理线程栈（字节；gnss/rdss 自检会在本线程阻塞等待） */
 #define CLI_THREAD_STACK        2560
 /** CLI 处理线程优先级（数值越小越高） */

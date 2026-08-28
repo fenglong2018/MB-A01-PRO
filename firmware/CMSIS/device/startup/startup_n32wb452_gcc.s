@@ -60,7 +60,9 @@ defined in linker script */
     .section  .text.Reset_Handler
   .weak  Reset_Handler
   .type  Reset_Handler, %function
-Reset_Handler:  
+Reset_Handler:
+  /* LED 低亮：复位后 GPIO 浮空会被灌亮。先拉灭再等 HSE（SystemInit 可能几十 ms） */
+  bl  board_gpio_hold_leds_off
 
 /* Copy the data segment initializers from flash to SRAM */  
   movs  r1, #0

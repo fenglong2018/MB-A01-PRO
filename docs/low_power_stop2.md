@@ -2,8 +2,8 @@
 
 > **状态（2026-08-18）：** 代码已接。  
 > - `FAKE_OFF←ALARM`：idle STOP0 + RTC 10s 浅醒双闪 + 空载采 ADC 1 次（不跑 GNSS）。  
-> - `FAKE_OFF←ON`：idle STOP0 + RTC 10s 喂狗/采电；**有卡则 10s 闪灯**，无卡灭灯。  
-> - 看电 BATT 整段 5s 不 STOP0/STOP2。ON 假关机立刻灭灯。无卡满 60min 真 OFF。  
+> - `FAKE_OFF←ON`：idle STOP0 + RTC 10s 喂狗/采电；**有卡则 10s 闪灯**。无卡 ON 不进假关机。  
+> - 看电 BATT 整段 5s 不 STOP0/STOP2。ON 假关机立刻灭灯。无卡 ON：5s 提示后真 OFF。  
 > - `OFF` / `FORCE_OFF`：`pm_stop2_enter()`（R-SRAM 栈，醒后软件复位）。  
 > - 硬件 IWDG：非真关机开启，超时≈26s；发信每 5s 喂；STOP2 前 `iwdg_stop2_quiet`。冷启动真关机先不开狗。  
 > 板级电流、STOP2 唤醒脚、retention 需实机确认。手册 MCU 典型值见下文 **§2.0**（STOP0 90 µA / STOP2 6 µA / STANDBY 2.5 µA）。  
@@ -161,7 +161,7 @@
 | 逻辑态 | 2026-08-18 |
 |--------|------|
 | `OFF` / `FORCE_OFF` | **真关机 STOP2**（`iwdg_stop2_quiet`，灯灭） |
-| `FAKE_OFF` | RTC 10s 浅醒：ALARM 双闪 + 空载采电；有卡 ON 10s 单闪；无卡只采电；idle 可 STOP0 |
+| `FAKE_OFF` | RTC 10s 浅醒：ALARM 双闪 + 空载采电；有卡 ON 10s 单闪；idle 可 STOP0 |
 | CHARGE / PASSTHRU | **禁止** STOP2；有 USB 时 idle 也不进 STOP0 |
 | 关机看电 `BATT` | **禁止** STOP2；MODE 保持 `pm_lock`，不进 STOP0 |
 
@@ -170,7 +170,8 @@
 ```text
 ALARM 或 ON（醒着发信）
   → 跑一拍 GNSS/RDSS（成功/失败/无卡都算结束）
-  → ON：立刻灭灯 → FAKE_OFF；无卡满 60min → 真 OFF
+  → ON 有卡：立刻灭灯 → FAKE_OFF
+  → ON 无卡：5s 提示 → 真 OFF
   → ALARM：立刻 FAKE_OFF
   → RTC 10s：浅醒喂狗 + 空载采电；仅 ALARM 双闪
   → 2/5/10min 到点：满醒 GNSS/RDSS

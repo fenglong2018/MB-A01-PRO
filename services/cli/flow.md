@@ -14,4 +14,4 @@ flowchart TD
 
 退出透传必须发 `{` 开头的 `stream.set` `enable:0`。
 
-`io.*` 表在 `cli_io.c`，GPIO **未接**，返回 `not_ready`。
+`io.*` 表在 `cli_io.c`，读写真实 GPIO。`val` 是脚电平。

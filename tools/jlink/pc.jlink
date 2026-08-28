@@ -1,0 +1,4 @@
+// 采样当前 PC，用来判断 CPU 平时停在哪（配合 addr2line 解析）
+halt
+go
+qc

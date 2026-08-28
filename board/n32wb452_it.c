@@ -37,6 +37,7 @@
 #include "n32wb452_exti.h"
 #include "main.h"
 #include "usb_istr.h"
+#include "usb_hw.h"
 #include <rthw.h>
 #include <rtthread.h>
 
@@ -126,9 +127,8 @@ void USBWakeUp_IRQHandler(void)
 
 void USB_LP_CAN1_RX0_IRQHandler(void)
 {
-    rt_interrupt_enter();
+    g_usb_irq_cnt++;
     USB_Istr();
-    rt_interrupt_leave();
 }
 
 /**

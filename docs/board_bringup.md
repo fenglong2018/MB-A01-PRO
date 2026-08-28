@@ -1,8 +1,9 @@
 # 板级按模块验证
 
-> **变更记录（2026-08-19）**  
+> **变更记录（2026-08-25）**  
+> 串口助手开关 GNSS/RDSS 透传：第 0.3 节 + 第 7、8 节。  
 > 透传：**GNSS/RDSS UART ↔ 同一 USB CDC**。进 `PASSTHRU` 后 CDC ulog 默认静音。  
-> CLI `io.*` 仍 `not_ready`。第 12 节是调试现场勾选表。
+> CLI `io.*` 已接真实 GPIO。第 12 节是调试现场勾选表。
 
 关联：[`services/cli/README.md`](../services/cli/README.md)、[`tools/host_pc/README.md`](../tools/host_pc/README.md)、[`app/mode/fsm.md`](../app/mode/fsm.md)、[`docs/module_status.md`](module_status.md)。
 
@@ -12,7 +13,7 @@
 
 1. **不要**为每个模块改 `product_config.h` 重编。除非某模块把系统卡死、USB 都没了，才临时 `USE_xxx 0` 缩小范围。  
 2. **USB 一直插着。** 插着会进 `CHARGE`（或透传时 FSM 为 `PASSTHRU`、灯走充电外观），**不会进 STOP2**，COM 口不会被真关机掐掉。  
-3. 入口：`tools/host_pc` → 选 COM → 连接（DTR=1）→ Ping。也可用任意串口助手，一行一条 JSON，`\n` 结尾。  
+3. 入口：`tools/host_pc` → 选 COM → 连接（DTR=1）→ Ping。也可用任意串口助手（第 0.3 节）。  
 4. 一次只动一个变量。`test.gnss.fix` / `test.rdss.*` / `test.session.once` 会阻塞，等 RSP 再发下一条。  
 5. 射频步骤同时看 **轨电压**，不要只看 JSON。
 
@@ -36,11 +37,32 @@
 
 | 缺口 | 影响 | 上板替代 |
 |------|------|----------|
-| **`io.*` 全 `ready:0`** | 上位机 IO 页不能拨 EN_* / LED | 会话时万用表量轨；灯用 `test.led` |
 | 无独立「晶振」命令 | — | HSE：USB 能枚举；LSE：`test.rtc` |
 | 上位机无独立 NMEA 终端 | 开关+解析在「射频」页 | 表看 GSV/PWI；默认可不刷 `$` 到日志 |
 
 退出透传：发一行以 `{` 开头的 JSON（如 `stream.set` `enable:0`）。透传中非 `{` 行会写给模块。CDC ulog 随退出恢复。要在透传里看固件日志：先 `{"cmd":"log.cdc","passthru_mute":0}`（仅 RAM，不进 `cfg`）。
+
+### 0.3 串口助手开关透传
+
+USB **虚拟串口（CDC）**，与 CLI / ulog / 透传共用同一个 COM。不要和 `shy_host` 同时占这个口。
+
+| 项 | 设置 |
+|----|------|
+| 波特率 | 115200 8N1（CDC 实际不吃波特率） |
+| DTR | **打开**（多数助手默认开；不开可能没应答） |
+| 发送 | 一行一条，以 `\n` 或 `\r\n` 结尾 |
+| SSCOM 快捷条 | 导入 [`tools/sscom/sscom_cli.ini`](../tools/sscom/sscom_cli.ini)；须勾「加回车换行」 |
+
+先测通口，再看能否开透传：
+
+```json
+{"id":1,"cmd":"ping"}
+{"id":2,"cmd":"mode.get"}
+```
+
+`ping` 应回 `ok:1`。`mode` 须为 `CHARGE`（插着 USB）或 `ON`。**`OFF` / `ALARM` / 保护不能开透传。**
+
+开/关命令见第 7、8 节。建议 **一次只开 GNSS 或 RDSS 一个通道**。两个都开过，必须两个都 `enable:0` 才退出 `PASSTHRU`。
 
 整机（假关机 10s、STOP2、72h、低电 N）第 11 步以后 **拔 USB** 测。
 
@@ -77,7 +99,7 @@
 {"id":15,"cmd":"test.adc"}
 ```
 
-看 `mv` / `lookup_mv` / `pct` / `level` / `charge`。插 USB 时 `charge` 应为 1。万用表量电芯对照 `mv`（充电查表会减 `charge_offset_mv`，默认 100mV）。
+看 `mv` / `lookup_mv` / `pct` / `level` / `charge` / `vdda`（即 `adc_vdda_mv` 系数）。插 USB 时 `charge` 应为 1。万用表量电芯对照 `mv`；偏了改 `adc_vdda_mv`（默认 3300），不要靠内部 1.2V。充电查表另减 `charge_offset_mv`。
 
 ---
 
@@ -107,31 +129,62 @@ LED1/2/3 **低电平点亮**。
 
 ## 6. 控制输出 IO
 
-`io.list` / `io.set` **会 `not_ready`**。产品轨：
+`io.list` / `io.get` / `io.set` 读写真实 GPIO（`val` 为脚电平）。产品轨仍由会话管，IO 页强拨会和引用计数打架：
 
 - `MCU_EN_PLNA`：`pwr_plna_acquire`（GNSS/RDSS 共用）  
 - `EN_PGNSS` / `EN_LNA_GNSS`：GNSS 自管  
 - RDSS 使能在 `BSP/rdss`
 
-**替代：** 跑第 9 步 `test.gnss.fix` 时量 GNSS 轨是否先高后低；`test.rdss.card` 时量 RDSS/PLNA。不要用 CLI 强拨，以免和引用计数打架。
+CHARGE 下灯动画会覆盖 LED 写入。测轨仍可用第 9 步 `test.gnss.fix` / `test.rdss.card` 加表笔。
 
 ---
 
 ## 7. GNSS 透传
 
+开：
+
 ```json
 {"id":3,"cmd":"stream.set","name":"gnss","enable":1}
 ```
 
-通过：`mode.get` 为 `PASSTHRU`；上位机 **射频** 页可见星/SNR。PC 发的非 JSON 行会到 GNSS UART。ulog 默认静音。
+通过：应答 `ok:1`；`mode.get` 为 `PASSTHRU`；COM 上见 `$GNGGA` / `$GNRMC` 等 NMEA。ulog 默认静音。上位机走 **射频** 页可见星/SNR。
 
-测完：`{"cmd":"stream.set","name":"gnss","enable":0}`。不关则后续 `test.gnss.fix` 会 `busy_passthru`。
+开透传后：
+
+| PC 发出的行 | 去向 |
+|-------------|------|
+| 以 `{` 开头 | 仍是 JSON CLI（用来关透传） |
+| 不以 `{` 开头 | 直接写到 GNSS UART |
+
+关（**必须**发 `{` 开头，漏 `\n` 也不会处理）：
+
+```json
+{"id":6,"cmd":"stream.set","name":"gnss","enable":0}
+```
+
+不关则后续 `test.gnss.fix` 会 `busy_passthru`。
 
 ---
 
 ## 8. RDSS 透传
 
-`stream.set` `name":"rdss"`。一次只开一个通道。通过：射频页 `$BDPWI` 波束/S2C。测完关掉。
+开：
+
+```json
+{"id":4,"cmd":"stream.set","name":"rdss","enable":1}
+```
+
+通过：应答 `ok:1`；`mode.get` 为 `PASSTHRU`；COM 上见 `$BD…`（如 `$BDPWI`）。ulog 默认静音。上位机射频页看波束/S2C。建议先关 GNSS 再开 RDSS（一次一个通道）。
+
+PC 发的非 `{` 行写到 RDSS UART。关：
+
+```json
+{"id":7,"cmd":"stream.set","name":"rdss","enable":0}
+```
+
+查询：`{"cmd":"stream.get","name":"rdss"}` 或 `{"cmd":"stream.list"}`。
+
+常见失败：`not_built`（未编 `USE_RDSS`）；`mode.get` 仍不是 `PASSTHRU`（当前 OFF/ALARM/保护，或模块 `enter` 失败，量轨）。
 
 ---
 
@@ -156,7 +209,7 @@ LED1/2/3 **低电平点亮**。
 {"id":19,"cmd":"test.rdss.send"}
 ```
 
-先查卡（`cfg.get` 的 `bd_card`），再发载荷 `TEST`。要波束、卡、频度允许。`pa_enable` 默认 0。
+先查卡（`cfg.get` 的 `bd_card`），再发载荷 `TEST`。要波束、卡、频度允许。**本版** 5V 随 RDSS 上电，不看 `pa_enable`（该字段默认 0 也照样开 PA）。TD3203B 规格：5V 只供发射功放，接收/查卡不需要；本版测完后再改「仅发射开 PA」。
 
 ---
 

@@ -5,9 +5,11 @@
 > 手册 MCU 典型电流（后续优化对照）：STOP0 **90 µA**（全 SRAM）；STOP2 **6 µA**（16KB R-SRAM + CPU 寄存器）；STANDBY **2.5 µA**（备份域 + 16KB R-SRAM，可选 RTC）。细则 `docs/low_power_stop2.md` §2.0。
 >
 >
+> **变更记录（2026-08-26）**  
+> idle 禁 STOP0：PA7 **或** `usb_cdc_is_on()`（CDC 已拉 DP）。只看脚会在抖动时进 STOP0 掐 48M，主机无法识别。  
 > **变更记录（2026-08-18）**  
 > `pm_stop2_enter()` 已接：切 `.rram` 栈 → STOP2 → 醒后软件复位。  
-> **解耦：** idle 读 `board_usb_inserted()`（USB_IN 脚），有线则跳过 STOP0（PLL/USB 48M 在 STOP0 里保不住）。不经过 MODE，也不再 `pm_boot_hold`。透传仍 `pm_lock`。
+> **解耦：** idle 不经过 MODE，也不再 `pm_boot_hold`。透传仍 `pm_lock`。
 
 ## 开关
 
@@ -20,12 +22,12 @@
 ```text
 tidle（空闲线程）
   → pm_idle_hook
-  → lock≠0 或 USB_IN 插入？跳过（保住 PLL / USB 48M）
+  → lock≠0 或 USB_IN 或 CDC 已 start？跳过（保住 PLL / USB 48M）
   → 否则 STOP0
   → 醒来 board_clock_resume_after_stop()（HSE+PLL+SysTick+USB clk）
 ```
 
-- **不解耦业务**：不 `#include mode/gnss`。USB 线只问板级 `board_usb_inserted()`。MODE 在非 `FAKE_OFF` 时 `pm_lock`；KEY 滤波、nvflash、会话发信再叠一层。
+- **不解耦业务**：不 `#include mode/gnss`。USB：idle 读 `board_usb_inserted()` **或** `usb_cdc_is_on()`。MODE 在非 `FAKE_OFF` 时 `pm_lock`；KEY 滤波、nvflash、会话发信再叠一层。
 - **假关机**：逻辑态 `FAKE_OFF` + RTC 10s 心跳；idle 仍可 STOP0。
 - **真关机 STOP2**：`pm_stop2_enter()`（R-SRAM 栈 + 醒后复位）。见 `docs/low_power_stop2.md`。
 
@@ -50,4 +52,4 @@ tidle（空闲线程）
 
 - GNSS/RDSS 会话开始/结束（发信路径已喂狗；是否 lock 可再定）
 
-已接 lock：`nvflash` 擦写；MODE 仅透传。USB 线：idle → `board_usb_inserted()`。
+已接 lock：`nvflash` 擦写；MODE 仅透传。USB：idle → PA7 或 CDC 已 start。

@@ -67,19 +67,21 @@
 /*-------------------------------------------------------------*/
 /* -------------------   ISTR events  -------------------------*/
 /*-------------------------------------------------------------*/
-/* IMR_MSK：枚举前不要 SUSPM/ESOFM。
- * CherryUSB 同芯片例程：无 SOF 时 SUSP→Resume(LATER) 会往总线上打 K 态，
- * 主机反复复位，设备管理器一直刷新、不出 COM。
- * SOF 留给已配置后的 CDC IN。 */
+/* IMR_MSK：对齐同芯片能枚举的 RT_Thread18 CherryUSB。
+ * 枚举前不要 SUSPM：拉 DP 后总线空闲 >3ms 会进 Suspend()，把随后 RESET 清掉 → VID_0000/代码 43。
+ * SOF 留给 CDC IN。 */
 #define IMR_MSK (CTRL_CTRSM | CTRL_WKUPM | CTRL_ERRORM | \
                  CTRL_SOFM | CTRL_RSTM)
 
-/*#define CTR_CALLBACK*/
+/* CTR_Callback 记录最后一次 SETUP 请求，供 J-Link 不停机读取 */
+#define CTR_CALLBACK
 /*#define DOVR_CALLBACK*/
-/*#define ERR_CALLBACK*/
+/* ERR_Callback 计数：区分「总线在正常发 SOF」和「每个包都收错」 */
+#define ERR_CALLBACK
 /*#define WKUP_CALLBACK*/
 /*#define SUSP_CALLBACK*/
-/*#define RESET_CALLBACK*/
+/* RESET_Callback 只累加计数，供 J-Link 不停机读取判断总线是否在动 */
+#define RESET_CALLBACK
 #define SOF_CALLBACK
 /*#define ESOF_CALLBACK*/
 /* CTR service routines */

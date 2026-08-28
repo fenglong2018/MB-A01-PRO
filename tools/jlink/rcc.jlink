@@ -1,0 +1,34 @@
+// 不复位，挂上去看一眼实时时钟状态再放行
+// 0x40021000 RCC->CTRL        bit17=HSERD  bit25=PLLRD  bit1=HSIRD
+// 0x40021004 RCC->CFG         bit3:2=SCLKSTS(00=HSI 01=HSE 10=PLL)
+//                             bit16=PLLSRC(0=HSI/2 1=HSE) bit17=PLLHSEPRES
+//                             bit23:22=USBPRES(00=/1.5 01=/1 10=/2 11=/3)
+// 0x4002101C RCC->APB1PCLKEN  bit23=USB 时钟使能
+// USB 外设（RegBase 0x40005C00）：
+// 0x40005C00 EP0R   bit15=CTR_RX bit[13:12]=STAT_RX(11=VALID) bit11=SETUP
+//                   bit[10:9]=EP_TYPE(01=CONTROL) bit7=CTR_TX bit[5:4]=STAT_TX
+// 0x40005C40 CNTR   中断使能掩码
+// 0x40005C44 ISTR   中断状态
+// 0x40005C4C DADDR  bit7=EF(功能使能，为 0 则不应答任何令牌) bit[6:0]=地址
+// 0x40005C50 BTABLE 缓冲描述表偏移
+// 0x40006000 EP0 BTABLE 项：TxAddr/TxCount/RxAddr/RxCount
+halt
+mem32 0x40021000 1
+mem32 0x40021004 1
+mem32 0x4002101C 1
+mem32 0x40005C00 1
+mem32 0x40005C40 1
+mem32 0x40005C44 1
+mem32 0x40005C4C 1
+mem32 0x40005C50 1
+mem32 0x40006000 4
+// 0x40001820 DP_CTRL bit28=DP 内部上拉使能
+// 0x40005C48 FNR     bit15=RXDP bit14=RXDM（D+/D- 当前电平）
+// 0x40010804 GPIOA_CRH  PA11 在 bit[15:12]，PA12 在 bit[19:16]
+// 0x40010004 AFIO_RMP_CFG 确认没有别的外设被重映射到 PA11/PA12
+mem32 0x40001820 1
+mem32 0x40005C48 1
+mem32 0x40010804 1
+mem32 0x40010004 1
+go
+qc

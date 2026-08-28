@@ -230,7 +230,7 @@ vpath %.c $(sort $(dir $(C_SOURCES)))
 vpath %.s $(sort $(dir $(ASM_SOURCES_S)))
 vpath %.S $(sort $(dir $(ASM_SOURCES_S_UPPER)))
 
-.PHONY: all clean size download flash reset info
+.PHONY: all clean size download flash reset clk cmp verify info
 
 all: info $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex $(BUILD_DIR)/$(TARGET).bin size
 
@@ -240,7 +240,7 @@ info:
 	@echo "Download port : $(JLINK_PORT) ($(JLINK_IF)/J-Link)"
 	@echo "Device        : $(JLINK_DEVICE)  speed=$(JLINK_SPEED) kHz"
 	@echo "Parallel jobs : $(JOBS) (only for make / make all)"
-	@echo "Targets       : make | make clean | make flash | make reset"
+	@echo "Targets       : make | make clean | make flash | make cmp | make reset"
 
 $(BUILD_DIR)/%.o: %.c Makefile | $(BUILD_DIR)
 	$(CROSS_COMPILE)gcc $(CFLAGS) $(DEFS) $(C_INCLUDES) -c \
@@ -278,6 +278,8 @@ endif
 
 JLINK_RESET_SCRIPT := $(TOOLS_DIR)/jlink/reset.jlink
 JLINK_FLASH_SCRIPT := $(TOOLS_DIR)/jlink/flash.jlink
+JLINK_RCC_SCRIPT   := $(TOOLS_DIR)/jlink/rcc.jlink
+JLINK_CMP_SCRIPT   := $(TOOLS_DIR)/jlink/verify.jlink
 JLINK_EXE          ?= $(shell command -v JLinkExe 2>/dev/null || echo /opt/SEGGER/JLink/JLinkExe)
 
 define jlink_cmd
@@ -299,5 +301,56 @@ reset:
 flash: $(BUILD_DIR)/$(TARGET).hex
 	$(call jlink_cmd,$(JLINK_FLASH_SCRIPT))
 	@echo "Flashed build/$(TARGET).hex via $(JLINK_PORT) (reset + run)"
+
+# 不复位，dump RCC + USB 诊断计数器，看完自动 go。
+# 计数器地址每次重编都会变，从 map 现取，避免脚本里写死。
+GEN_RCC_SCRIPT := $(BUILD_DIR)/rcc_gen.jlink
+
+clk:
+	@map="$(BUILD_DIR)/$(TARGET).map"; \
+	if [ ! -f "$$map" ]; then echo "缺少 $$map，先 make"; exit 1; fi; \
+	cp "$(JLINK_RCC_SCRIPT)" "$(GEN_RCC_SCRIPT).tmp"; \
+	sed -i '/^go$$/d;/^qc$$/d' "$(GEN_RCC_SCRIPT).tmp"; \
+	for sym in g_usb_irq_cnt g_usb_reset_cnt g_usb_sof_cnt g_usb_err_cnt \
+	           g_usb_ctr_cnt g_usb_desc_cnt g_usb_last_req bDeviceState; do \
+		addr=$$(awk -v s="$$sym" '$$2==s && NF==2 {print $$1; exit}' "$$map"); \
+		if [ -n "$$addr" ]; then \
+			echo "// $$sym" >> "$(GEN_RCC_SCRIPT).tmp"; \
+			echo "mem32 $$addr 1" >> "$(GEN_RCC_SCRIPT).tmp"; \
+		fi; \
+	done; \
+	printf 'go\nqc\n' >> "$(GEN_RCC_SCRIPT).tmp"; \
+	mv "$(GEN_RCC_SCRIPT).tmp" "$(GEN_RCC_SCRIPT)"
+	$(call jlink_cmd,$(GEN_RCC_SCRIPT))
+
+# 不擦写：halt 后把片内 Flash 和即将烧录的 .bin 逐字节比完再 go。
+# 只比映像长度（nvflash 配置区不在 .bin 里，不会误判）。
+# JLinkExe 校验失败仍可能返回 0，必须看日志关键字。
+GEN_CMP_SCRIPT := $(BUILD_DIR)/cmp.jlink
+FLASH_ADDR     ?= 0x08000000
+
+cmp verify: $(BUILD_DIR)/$(TARGET).bin
+	@bin="$(BUILD_DIR)/$(TARGET).bin"; \
+	sz=$$(wc -c < "$$bin"); \
+	printf 'halt\nverifybin %s %s\ngo\nqc\n' "$$bin" "$(FLASH_ADDR)" > "$(GEN_CMP_SCRIPT)"; \
+	echo "[$(JLINK_PORT)] cmp MCU $(FLASH_ADDR)+$$sz <-> $$bin"
+	@if ! command -v "$(JLINK_EXE)" >/dev/null 2>&1 && [ ! -x "$(JLINK_EXE)" ]; then \
+		echo "找不到 J-Link: $(JLINK_EXE)"; \
+		exit 1; \
+	fi
+	@log="$(BUILD_DIR)/cmp.log"; \
+	cd "$(ROOT)" && "$(JLINK_EXE)" -NoGui 1 $(if $(JLINK_USB),-USB $(JLINK_USB),) \
+		-device $(JLINK_DEVICE) -if $(JLINK_IF) -speed $(JLINK_SPEED) \
+		-autoconnect 1 -CommandFile "$(GEN_CMP_SCRIPT)" > "$$log" 2>&1; \
+	cat "$$log"; \
+	if grep -qiE 'Verification of .* successful|Verification successful|Contents of specified file and target memory match' "$$log"; then \
+		echo "cmp: SAME  片内与 build/$(TARGET).bin 一致"; \
+	elif grep -qiE 'Verify (error|failed)|Verification failed|Failed to open file|Could not connect' "$$log"; then \
+		echo "cmp: DIFFERENT  片内与 build/$(TARGET).bin 不一致（或探头/目标未连上）"; \
+		exit 1; \
+	else \
+		echo "cmp: UNKNOWN  看 $(BUILD_DIR)/cmp.log"; \
+		exit 1; \
+	fi
 
 download: flash

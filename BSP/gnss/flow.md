@@ -1,6 +1,6 @@
 # GNSS 流程图
 
-规则与引脚：[`README.md`](README.md)。用法：CLI `test.gnss.fix` / `stream.set` `name:gnss`。
+规则与引脚：[`README.md`](README.md)。用法：CLI `test.gnss.fix` / `stream.set` `name:gnss`。串口助手逐步操作：[`docs/board_bringup.md`](../../docs/board_bringup.md) 第 0.3、7 节。
 
 ## 驱动状态
 
@@ -39,7 +39,7 @@ flowchart TD
 ```json
 {"id":17,"cmd":"test.gnss.fix"}
 {"id":3,"cmd":"stream.set","name":"gnss","enable":1}
-{"id":4,"cmd":"stream.set","name":"gnss","enable":0}
+{"id":6,"cmd":"stream.set","name":"gnss","enable":0}
 ```
 
-`test.gnss.fix` **不写 RTC**。产品校时只在 session 的 ON/未校时 ALARM。
+`test.gnss.fix` **不写 RTC**。产品校时只在 session 的 ON/未校时 ALARM。关透传必须 `{` 开头。

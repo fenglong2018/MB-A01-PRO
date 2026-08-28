@@ -21,11 +21,7 @@ extern "C" {
 #ifndef MODE_BATT_MS
 #define MODE_BATT_MS            5000
 #endif
-/** ON/FAKE_OFF←ON 连续无卡满这么多分钟 → 真 OFF；0=关闭。不进 JSON */
-#ifndef MODE_ON_NOSIM_OFF_MIN
-#define MODE_ON_NOSIM_OFF_MIN   60
-#endif
-/** 无卡 ON 一拍结束后先亮灯提示再假关机；0=立刻假关机 */
+/** 无卡 ON 一拍结束后先亮灯提示再真关机；0=立刻真关机。不进 JSON */
 #ifndef MODE_ON_NOSIM_HINT_MS
 #define MODE_ON_NOSIM_HINT_MS   5000
 #endif

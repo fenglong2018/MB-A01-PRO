@@ -1,29 +1,45 @@
 /**
  * @file usb_hw.c
- * @brief N32WB452 USB 时钟/中断；对齐官方 Virtual_COM_Port
+ * @brief N32WB452 USB 时钟/中断
  *
- * PA11=USBDM、PA12=USBDP（手册固定脚）。USB 工作时不要配成普通 GPIO。
- * 关机须模拟输入 + 关内部上拉，否则 STOP2 仍约 1.6mA。
- * DP 内部上拉在 0x40001820，写之前必须开 PWR 时钟。
+ * 对齐官方 Virtual_COM_Port：
+ * - 从不 GPIO_Init PA11/PA12（USBDM/USBDP 由 PHY 占用）
+ * - Set_USBClock 只配 PLL/3 并开 USB 钟
+ * - USB_LP 抢占 1；不改 NVIC 分组（board 已是 Group_4）
  */
 #include "hw_config.h"
 #include "usb_lib.h"
 #include "usb_pwr.h"
-#include "board_pins.h"
 #include "n32wb452_rcc.h"
 #include "n32wb452_gpio.h"
 #include "n32wb452_exti.h"
+#include "board_clock.h"
 #include "misc.h"
 
-static void usb_pins_analog(void)
-{
-    GPIO_InitType gpio;
+volatile uint32_t g_usb_irq_cnt;
+volatile uint32_t g_usb_reset_cnt;
+volatile uint32_t g_usb_ctr_cnt;
+volatile uint32_t g_usb_sof_cnt;
+volatile uint32_t g_usb_err_cnt;
+volatile uint32_t g_usb_desc_cnt;
+volatile uint32_t g_usb_last_req;
 
-    RCC_EnableAPB2PeriphClk(USB_GPIO_CLK, ENABLE);
-    GPIO_InitStruct(&gpio);
-    gpio.Pin        = USB_DM_PIN | USB_DP_PIN;
-    gpio.GPIO_Mode  = GPIO_Mode_AIN;
-    GPIO_InitPeripheral(USB_DM_PORT, &gpio);
+void RESET_Callback(void)
+{
+    g_usb_reset_cnt++;
+}
+
+void ERR_Callback(void)
+{
+    g_usb_err_cnt++;
+}
+
+void CTR_Callback(void)
+{
+    g_usb_ctr_cnt++;
+    g_usb_last_req = ((uint32_t)pInformation->bmRequestType << 24)
+                   | ((uint32_t)pInformation->bRequest << 16)
+                   | (uint32_t)pInformation->USBwValue;
 }
 
 void USB_Interrupts_Config(void)
@@ -53,20 +69,41 @@ void USB_Interrupts_Config(void)
 
 void Set_USBClock(void)
 {
-    uint32_t n;
+    uint32_t pll;
 
     /* SystemInit 写完 PWR_CTRL3 会关掉 PWR 钟；内部 DP 上拉寄存器依赖它 */
     RCC_EnableAPB1PeriphClk(RCC_APB1_PERIPH_PWR, ENABLE);
 
-    /* USB FS 必须 PLL 48M。HSE 失败时不要死等 USB 线程。 */
-    n = 0u;
-    while ((RCC_GetSysclkSrc() != 0x08) && (n < 1000000u))
+    /* HSE 没起振时 SystemInit 会退到裸 HSI 且不开 PLL，先把 PLL 补上 */
+    board_clock_ensure_pll();
+
+    /*
+     * 分频器按实际 PLL 频率选，不能写死 /3：
+     * HSE 路 144M → /3，HSI 兜底路 72M → /1.5，都得到 48M。
+     */
+    pll = board_clock_pll_hz();
+    if (pll == 144000000u)
     {
-        n++;
+        RCC_ConfigUsbClk(RCC_USBCLK_SRC_PLLCLK_DIV3);
+    }
+    else if (pll == 96000000u)
+    {
+        RCC_ConfigUsbClk(RCC_USBCLK_SRC_PLLCLK_DIV2);
+    }
+    else if (pll == 72000000u)
+    {
+        RCC_ConfigUsbClk(RCC_USBCLK_SRC_PLLCLK_DIV1_5);
+    }
+    else if (pll == 48000000u)
+    {
+        RCC_ConfigUsbClk(RCC_USBCLK_SRC_PLLCLK_DIV1);
+    }
+    else
+    {
+        /* 拿不到 48M，开了 USB 钟也只会枚举失败 */
+        return;
     }
 
-    /* HSE 32M → PLL 144M / 3 = 48M */
-    RCC_ConfigUsbClk(RCC_USBCLK_SRC_PLLCLK_DIV3);
     RCC_EnableAPB1PeriphClk(RCC_APB1_PERIPH_USB, ENABLE);
 }
 
@@ -77,7 +114,6 @@ void usb_hw_deinit(void)
     PowerOff();
     NVIC_DisableIRQ(USB_LP_CAN1_RX0_IRQn);
     NVIC_DisableIRQ(USBWakeUp_IRQn);
-    usb_pins_analog();
     RCC_EnableAPB1PeriphClk(RCC_APB1_PERIPH_USB, DISABLE);
 }
 

@@ -12,10 +12,14 @@ extern "C" {
 #endif
 
 void cdc_acm_init(void);
-/** 仅 USB 插入时调用；未插线不拉 DP，避免关机 1.6mA */
+/** 仅 USB 插入确认后调用；未插线不拉 DP，避免关机 1.6mA */
 void usb_cdc_start(void);
-/** 拔线 / STOP2 前：关上拉、PHY、脚改模拟 */
+/** 拔线确认 / STOP2 前：关上拉、PHY、脚改模拟 */
 void usb_cdc_stop(void);
+/** 1=CDC 已启动（PHY/DP 上拉开着） */
+uint8_t usb_cdc_is_on(void);
+/** 1=主机已 SET_CONFIGURATION（或随后 suspend） */
+uint8_t usb_cdc_is_configured(void);
 void cdc_acm_data_send_with_dtr_test(void);
 
 /** 主机打开虚拟串口时通常置位 DTR；ulog CDC 后端用此判断可否发送 */

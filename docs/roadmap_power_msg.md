@@ -12,17 +12,17 @@
 ### 分压
 
 ```text
-BAT -- R16(1.2M) --+-- AD_BAT (PA4 / ADC2 CH1)
+BAT -- R16(390k) --+-- AD_BAT (PA4 / ADC2 CH1)
                    |
-                 R17(3.3M)
+                 R17(1.1M)
                    |
                   GND
 ```
 
-- \(V_{AD} = V_{BAT} \times 3.3 / 4.5 = V_{BAT} \times 11/15\)
-- \(V_{BAT} = V_{AD} \times 15/11\)
-- 满电 4.3V 时 \(V_{AD}\approx 3.15V\)（VDDA≈3.3V 安全）
-- 分压等效源阻约 **880kΩ** → 必须用最长采样时间（`ADC_SAMP_TIME_239CYCLES5`）
+- \(V_{AD} = V_{BAT} \times 1.1 / 1.49 = V_{BAT} \times 110/149\)
+- \(V_{BAT} = V_{AD} \times 149/110\)
+- 满电 4.2V 时 \(V_{AD}\approx 3.10V\)；4.35V 时约 3.21V（VDDA≈3.3V 安全）
+- 分压电流约 **2.8μA @ 4.2V**；等效源阻约 **288kΩ** → 仍用最长采样时间（`ADC_SAMP_TIME_239CYCLES5`）
 
 ### 校准与 VDDA
 
@@ -132,7 +132,7 @@ ADC码值 → Vbat(mV) → OCV表[101] → percent(0..100) → level → MODE
 | H2 | 冷启动 OFF+WARN 发 1 条 N + `lb_sent` | **完成**（2026-08-18） |
 | 调试 | 透传 USB 桥（`stream_set_sink` + CDC 下行） | **已接**；与 CLI 同一 COM |
 | 调试 | 透传时 CDC ulog 静音 | **已接**（MODE hold；`log.cdc` RAM 覆盖，不进 cfg） |
-| 调试 | CLI `io.*` 真实 GPIO | **未接**（`not_ready`） |
+| 调试 | CLI `io.*` 真实 GPIO | **已接** |
 
 ---
 

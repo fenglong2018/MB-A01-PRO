@@ -2,9 +2,9 @@
 
 > 范围：`app/`、`BSP/`、`services/`、`board/`、`config/`。  
 > 不展开：`middlewares/rt-thread`、`firmware`、`DeviceDrivers`（仅作底层依赖说明）。  
-> 日期：2026-08-19  
-> **本次变更：** 透传时默认静音 CDC ulog（MODE hold；`log.cdc` RAM，不进 cfg）。
-> 板内 `test.*` CLI 与上位机 V0.2 见第 8 章 / `tools/host_pc`。
+> 日期：2026-08-26  
+> **本次变更：** 四路 KEY 均为关中断后轮询；USB/SIM/FALL 积分加减；SOS 按下积分、松手 8 拍确认。CDC 仅插入确认后开一次。  
+> 串口助手开关 GNSS/RDSS 透传见第 3.4 节 / `board_bringup` 第 0.3、7、8 节。
 
 ---
 
@@ -135,6 +135,8 @@ adc: OK→WARN → MODE_EVT_BAT_WARN
 
 ### 3.4 透传
 
+串口助手（USB CDC、DTR、一行一条 JSON）开/关见 [`docs/board_bringup.md`](board_bringup.md) 第 0.3、7、8 节。上位机走射频页同一套 `stream.set`。
+
 ```text
 CLI stream.set → stream → mode_passthru_set
   → mode: PASSTHRU（先静音 CDC ulog）→ gnss/rdss_passthru_enter
@@ -142,6 +144,8 @@ CLI stream.set → stream → mode_passthru_set
 退出 / 通道全失败 / 保护离开 PASSTHRU → 恢复 CDC ulog
 不查 SIM：无卡也可上电调试
 需要透传时仍看 ulog：log.cdc passthru_mute:0（RAM，不进 cfg）
+OFF / ALARM / 保护不能开；建议一次只开 gnss 或 rdss
+关透传必须发 { 开头的 stream.set enable:0（两个都开过则两个都关）
 ```
 
 ### 3.5 浅睡 / 深睡
@@ -218,9 +222,10 @@ OFF / FORCE_OFF → pm_stop2_enter（R-SRAM 栈，醒后复位）
 |-----|------|
 | `key_init` | EXTI + `"key"` 线程 |
 | `sim_present` | SIM 在位（低有效，已滤波） |
+| `usb_present` | USB 已确认在位（插入积分满、尚未确认拔出） |
 | `board_key_irq_init` | 注册 EXTI 回调（内部） |
 
-**上报 MODE：** 短按/长按 SOS、FALL、USB_IN/OUT（双沿滤波）。SIM 更新 `sim_present()` 并投 `MODE_EVT_SIM`（假关机 ON 用来开关 10s 灯）；透传不查卡。
+**上报 MODE：** 短按/长按 SOS、FALL、USB_IN/OUT。SIM 更新 `sim_present()` 并投 `MODE_EVT_SIM`。四路均为 EXTI 关中断后 10ms 轮询。USB/SIM/FALL：有效 +1、无效 −1。USB 插入 **8** 拍 / 拔出 24 拍；SIM/FALL 认定 16 / 撤销 24。SOS：按下积分，满 240 拍立刻长按；连续 8 拍松开才短按（看 peak≥24）或 rearm。上电/STOP2：USB/SIM 无沿也积分当前电平；未插入不上报 OUT。
 
 ---
 
@@ -234,9 +239,9 @@ OFF / FORCE_OFF → pm_stop2_enter（R-SRAM 栈，醒后复位）
 | `adc_bat_get_mv/percent/level` | 电压、百分比、OK/WARN/PROTECT |
 
 **边沿事件：** 进 PROTECT→`BAT_PROTECT`；进 WARN→`BAT_WARN`（MODE：ON / FAKE_OFF←ON / OFF / 关机看电；告警忽略）；回到 OK→`BAT_OK`（清 `lb_sent`）  
-充电查表减 `charge_offset_mv`（见 cfg）。细则：`BSP/adc/README.md`。
+充电查表减 `charge_offset_mv`（见 cfg）。满量程用 `adc_vdda_mv`（默认 3300），不采内部 1.2V。细则：`BSP/adc/README.md`。
 
-**上位机：** MBA01 电量格式不变。`tools/host_pc` V0.2 配置页可改 `charge_offset_mv`，监视显示 lookup/charge。
+**上位机：** MBA01 电量格式不变。`tools/host_pc` V0.2 配置页可改 `charge_offset_mv`、`adc_vdda_mv`，监视显示 lookup/charge。
 
 ---
 
@@ -246,9 +251,9 @@ OFF / FORCE_OFF → pm_stop2_enter（R-SRAM 栈，醒后复位）
 |-----|------|
 | `led_init` | `"led"` 线程 |
 | `led_post_percent` | ADC 推电量动画 |
-| `led_post_mode` | MODE 推视图（`FAKE_OFF←ALARM` 显示 ALARM；`FAKE_OFF←ON` 有卡显示 ON、无卡灭灯；PASSTHRU+USB 显示充电外观） |
+| `led_post_mode` | MODE 推视图（`FAKE_OFF←ALARM` 显示 ALARM；`FAKE_OFF←ON` 有卡显示 ON；PASSTHRU+USB 显示充电外观） |
 
-ON：有卡从开机起 RTC 每 10s 亮 100ms（搜星和假关机同一条 WakeUp，不靠 SysTick 空等）。无卡开机：5s 内每秒亮 100ms，再假关机灭灯。ALARM：每 10s 双闪（100ms + 灭 200ms + 100ms）。BATT：流水各档 300ms，最后一档保持到进看电起 5s。`FAKE_OFF←ALARM` 由 RTC `LED_MSG_HB` 双闪。细则：`BSP/led/README.md`。
+ON：有卡从开机起 RTC 每 10s 亮 100ms（搜星和假关机同一条 WakeUp，不靠 SysTick 空等）。无卡开机：5s 内每秒亮 100ms，再真关机。ALARM：每 10s 双闪（100ms + 灭 200ms + 100ms）。BATT：流水各档 300ms，最后一档保持到进看电起 5s。`FAKE_OFF←ALARM` 由 RTC `LED_MSG_HB` 双闪。细则：`BSP/led/README.md`。
 
 ---
 
@@ -279,7 +284,8 @@ ON：有卡从开机起 RTC 每 10s 亮 100ms（搜星和假关机同一条 Wake
 | `rdss_passthru_*` / `rdss_on_bat_protect` | 透传 / 关电 |
 | `rdss_result_mq` | 结果队列 |
 
-**配置：** 收信号 `cfg_get_recv_id()`；PA 受 `pa_enable`（仅 RAM）；`$BDICP` 走 `cfg_note_bd_card`，**不改** `device_id`。**不校 RTC。**
+**配置：** 收信号 `cfg_get_recv_id()`；**本版** 5V PA 随 RDSS 上电（不看 `pa_enable`）；`$BDICP` 走 `cfg_note_bd_card`，**不改** `device_id`。**不校 RTC。**  
+**备注（2026-08-27，待本版测完再改）：** TD3203B 规格书 V1.2：`EN_5V`=`VCC_PA` 只给发射功放；接收/查卡走 3.3V `VCC`。下一版拟仅 CCTCQ 前开 5V。细则：`BSP/rdss/README.md`。
 
 ---
 
@@ -313,7 +319,7 @@ GNSS/RDSS **专用** EN 脚不放这里。
 | `pm_idle_hook_install` | 注册 idle→STOP0（INIT 已调） |
 | `pm_lock` / `pm_unlock` / `pm_lock_count` | 嵌套禁止浅睡 |
 
-醒后：`board_clock_resume_after_stop()`。MODE 非 `FAKE_OFF` 时 `pm_lock`（看电/充电/发信都不浅睡）。仅 `FAKE_OFF` 放行 STOP0+RTC 10s。USB 有线 idle 不 STOP0。nvflash/会话/KEY 滤波再叠 lock。`OFF`/`FORCE_OFF`：`pm_stop2_enter()`。IWDG：`BSP/iwdg`。
+醒后：`board_clock_resume_after_stop()`。MODE 非 `FAKE_OFF` 时 `pm_lock`（看电/充电/发信都不浅睡）。仅 `FAKE_OFF` 放行 STOP0+RTC 10s。USB：PA7 插入 **或** CDC 已 start 则 idle 不 STOP0。nvflash/会话/KEY 滤波再叠 lock。`OFF`/`FORCE_OFF`：`pm_stop2_enter()`。IWDG：`BSP/iwdg`。
 
 ---
 
@@ -322,10 +328,12 @@ GNSS/RDSS **专用** EN 脚不放这里。
 | API | 功能 |
 |-----|------|
 | `cfg_get/set_recv_id` | 收信卡号（Flash） |
-| `cfg_get/set_pa_enable` | 是否开 PA（仅 RAM） |
+| `cfg_get/set_pa_enable` | 仅 RAM；**本版不挡 5V**（上电即开）。规格上 5V 仅发射用，下一版再试按发射窗口切 |
 | `cfg_get/set_device_id` | 设备编号（Flash；`$BDICP` 不改） |
 | `cfg_note_bd_card` | 北斗卡号；变了才进 4 槽历史 |
 | `cfg_get/set_charge_offset_mv` | 充电查表压差 |
+| `cfg_get/set_adc_vdda_mv` | ADC 满量程校准（默认 3300） |
+| `cfg_get/set_adc_vdda_mv` | ADC 满量程校准（默认 3300） |
 | `cfg_get/set_first_fix_unix` | 首次定位 Unix（GNSS RMC，只写一次） |
 | `cfg_get_hw_ver` / `cfg_set_hw_ver` | 硬件版本（出厂可写） |
 | `cfg_get_sw_ver` | 软件版本（`CFG_SW_VER`） |
@@ -352,7 +360,7 @@ GNSS/RDSS **专用** EN 脚不放这里。
 |------|------|
 | stream | `stream_set_enable` 联动 `mode_passthru_set`；`stream_write` 下行透传 |
 | cli | 一行 JSON；命令见 `services/cli/README.md` |
-| cdc | `cdc_acm_write` / RX 回调；DTR 控制日志是否真发出 |
+| cdc | `cdc_acm_write` / RX 回调；DTR 控制日志；插入确认后 `usb_cdc_start` 一次，拔出确认后 `usb_cdc_stop` |
 | ulog_cdc | 异步缓冲 16KB，满则**丢新留旧**；`PASSTHRU` 时默认静音本后端（`log.cdc`） |
 
 ---
@@ -436,18 +444,17 @@ GNSS/RDSS **专用** EN 脚不放这里。
 | 形态 | **V0.2**：`tools/host_pc`（Python + PySide6） |
 | 连接 | USB CDC；打开串口时拉 DTR |
 | 双通道 | `type==rsp` → 应答，其余 → 日志区（透传原文也在此） |
-| 功能页 | 监视 / 配置 / 自检 / **射频（透传+GSV/PWI）** / IO / 原始命令 |
-| 协议 | 复用 JSON CLI（含 `log.cdc` / `test.*`） |
+| 功能页 | 监视 / 配置 / 自检 / **射频（stream.set 开/关透传 + GSV/PWI）** / IO / 原始命令 |
+| 协议 | 复用 JSON CLI（含 `log.cdc` / `test.*`）；与串口助手同一套命令 |
 | 用法 | 见 [`tools/host_pc/README.md`](../tools/host_pc/README.md) |
 
 ### 8.3 按模块上板
 
-步骤、勾选表、透传静音与 `io.*` 替代测法：[`docs/board_bringup.md`](board_bringup.md)。
+步骤、勾选表、**串口助手开关透传**、透传静音与 `io.*` 替代测法：[`docs/board_bringup.md`](board_bringup.md) 第 0.3、7、8、12 节。
 
 ### 8.4 后续
 
-1. CLI `io.*` 接到真实 GPIO（或明确只用会话测轨）  
-2. 上位机透传终端窗、电量曲线、一键自检报告导出
+1. 上位机透传终端窗、电量曲线、一键自检报告导出
 
 ---
 

@@ -7,3 +7,6 @@ GCC/build/
 *.elf
 *.hex
 *.bin
+__pycache__/
+*.py[cod]
+*.pyo

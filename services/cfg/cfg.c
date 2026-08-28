@@ -21,7 +21,7 @@ typedef struct __attribute__((packed))
     uint32_t recv_id;
     uint32_t device_id;
     uint16_t charge_offset_mv;
-    uint16_t reserved;
+    uint16_t adc_vdda_mv;   /* 原 reserved；0=未写，RAM 用默认 3300 */
     uint32_t bd_card[CFG_BD_SLOTS];
     char     iccid[CFG_ICCID_SLOTS][CFG_ICCID_LEN];
     char     hw_ver[CFG_VER_LEN];
@@ -34,6 +34,7 @@ static uint32_t s_recv_id = CFG_DEFAULT_RECV_ID;
 static uint32_t s_device_id = CFG_DEFAULT_DEVICE_ID;
 static uint8_t  s_pa_enable;
 static uint16_t s_charge_offset_mv = CFG_DEFAULT_CHARGE_OFFSET_MV;
+static uint16_t s_adc_vdda_mv = CFG_DEFAULT_ADC_VDDA_MV;
 static uint32_t s_bd_card[CFG_BD_SLOTS];
 static uint32_t s_first_fix_unix;
 static cfg_nv_t s_nv;
@@ -50,6 +51,7 @@ static void nv_defaults(cfg_nv_t *n)
     n->recv_id = CFG_DEFAULT_RECV_ID;
     n->device_id = CFG_DEFAULT_DEVICE_ID;
     n->charge_offset_mv = CFG_DEFAULT_CHARGE_OFFSET_MV;
+    n->adc_vdda_mv = CFG_DEFAULT_ADC_VDDA_MV;
     strncpy(n->sw_ver, CFG_SW_VER, CFG_VER_LEN - 1u);
     strncpy(n->hw_ver, CFG_HW_VER, CFG_VER_LEN - 1u);
 }
@@ -70,6 +72,12 @@ static void nv_to_ram(const cfg_nv_t *n)
     {
         s_charge_offset_mv = CFG_CHARGE_OFFSET_MV_MAX;
         s_nv.charge_offset_mv = s_charge_offset_mv;
+    }
+    s_adc_vdda_mv = n->adc_vdda_mv;
+    if ((s_adc_vdda_mv < CFG_ADC_VDDA_MV_MIN) || (s_adc_vdda_mv > CFG_ADC_VDDA_MV_MAX))
+    {
+        s_adc_vdda_mv = CFG_DEFAULT_ADC_VDDA_MV;
+        s_nv.adc_vdda_mv = s_adc_vdda_mv;
     }
     memcpy(s_bd_card, n->bd_card, sizeof(s_bd_card));
     s_first_fix_unix = n->first_fix_unix;
@@ -124,6 +132,7 @@ int cfg_init(void)
     s_device_id = CFG_DEFAULT_DEVICE_ID;
     s_pa_enable = 0;
     s_charge_offset_mv = CFG_DEFAULT_CHARGE_OFFSET_MV;
+    s_adc_vdda_mv = CFG_DEFAULT_ADC_VDDA_MV;
     memset(s_bd_card, 0, sizeof(s_bd_card));
     s_first_fix_unix = 0;
     s_dirty = 0;
@@ -212,6 +221,29 @@ void cfg_set_charge_offset_mv(uint16_t mv)
     if (s_nv.charge_offset_mv != mv)
     {
         s_nv.charge_offset_mv = mv;
+        kick_save();
+    }
+}
+
+uint16_t cfg_get_adc_vdda_mv(void)
+{
+    return s_adc_vdda_mv;
+}
+
+void cfg_set_adc_vdda_mv(uint16_t mv)
+{
+    if (mv < CFG_ADC_VDDA_MV_MIN)
+    {
+        mv = CFG_ADC_VDDA_MV_MIN;
+    }
+    else if (mv > CFG_ADC_VDDA_MV_MAX)
+    {
+        mv = CFG_ADC_VDDA_MV_MAX;
+    }
+    s_adc_vdda_mv = mv;
+    if (s_nv.adc_vdda_mv != mv)
+    {
+        s_nv.adc_vdda_mv = mv;
         kick_save();
     }
 }
@@ -309,12 +341,13 @@ int cfg_to_json(char *buf, int buflen)
     }
     return snprintf(buf, (size_t)buflen,
                     "\"recv_id\":%lu,\"pa_enable\":%u,\"device_id\":%lu,"
-                    "\"charge_offset_mv\":%u,\"bd_card\":%lu,\"first_fix_unix\":%lu,"
+                    "\"charge_offset_mv\":%u,\"adc_vdda_mv\":%u,\"bd_card\":%lu,\"first_fix_unix\":%lu,"
                     "\"hw_ver\":\"%s\",\"sw_ver\":\"%s\",\"upgrade_unix\":%lu",
                     (unsigned long)s_recv_id,
                     (unsigned)s_pa_enable,
                     (unsigned long)s_device_id,
                     (unsigned)s_charge_offset_mv,
+                    (unsigned)s_adc_vdda_mv,
                     (unsigned long)s_bd_card[0],
                     (unsigned long)s_first_fix_unix,
                     s_nv.hw_ver,

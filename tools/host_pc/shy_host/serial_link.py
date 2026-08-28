@@ -95,9 +95,24 @@ class SerialLink:
         if not self.is_open or self._ser is None:
             raise RuntimeError("串口未打开")
         data = (text.rstrip("\r\n") + "\n").encode("utf-8", errors="replace")
-        with self._tx_lock:
-            self._ser.write(data)
-            self._ser.flush()
+        last: BaseException | None = None
+        for attempt in range(2):
+            try:
+                with self._tx_lock:
+                    if self._ser is None:
+                        raise RuntimeError("串口未打开")
+                    self._ser.write(data)
+                    # usbser 对 FlushFileBuffers 常回「设备不识别此命令」
+                    try:
+                        self._ser.flush()
+                    except Exception:
+                        pass
+                return
+            except Exception as exc:
+                last = exc
+                time.sleep(0.05)
+        assert last is not None
+        raise last
 
     def _rx_loop(self) -> None:
         while not self._stop.is_set():

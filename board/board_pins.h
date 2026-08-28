@@ -36,17 +36,17 @@ extern "C" {
 /* ADC                                                                        */
 /* -------------------------------------------------------------------------- */
 /* Pin11 PA4  AD_BAT  模拟输入  电池电压采样
- * 分压：BAT -- R16(1.2M) -- AD_BAT -- R17(3.3M) -- GND
- * Vbat = Vpin * (R16+R17)/R17 = Vpin * 15/11
- * N32WB452：PA4 只在 ADC2 CH1；ADC1 CH4 是 PA3。VDDA 仍用 ADC1 内部 1.2V。
+ * 分压：BAT -- R16(390k) -- AD_BAT -- R17(1.1M) -- GND
+ * Vbat = Vpin * (R16+R17)/R17 = Vpin * 149/110
+ * N32WB452：PA4 只在 ADC2 CH1；ADC1 CH4 是 PA3。满量程用 cfg.adc_vdda_mv（默认 3300）。
  */
 #define BAT_ADC_BAT_PORT               GPIOA
 #define BAT_ADC_BAT_PIN                GPIO_PIN_4
 #define BAT_ADC_BAT_CLK                RCC_APB2_PERIPH_GPIOA
 #define BAT_ADC_BAT_ADC                ADC2
 #define BAT_ADC_BAT_ADC_CH             ADC2_Channel_01_PA4
-#define BAT_DIV_R16_OHM                1200000u
-#define BAT_DIV_R17_OHM                3300000u
+#define BAT_DIV_R16_OHM                400u
+#define BAT_DIV_R17_OHM                1100u
 
 /* -------------------------------------------------------------------------- */
 /* 检测 / 控制 GPIO                                                           */

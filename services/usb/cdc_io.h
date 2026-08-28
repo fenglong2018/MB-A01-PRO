@@ -15,6 +15,11 @@ typedef void (*cdc_rx_cb_t)(const uint8_t *data, uint32_t len);
 
 void cdc_acm_set_rx_callback(cdc_rx_cb_t cb);
 uint8_t cdc_acm_is_dtr_enable(void);
+/** 1=已 usb_cdc_start（DP 上拉/PHY 开着）；idle 禁 STOP0 用，不看 PA7 抖动 */
+uint8_t usb_cdc_is_on(void);
+uint8_t usb_cdc_is_configured(void);
+void usb_cdc_start(void);
+void usb_cdc_stop(void);
 uint32_t cdc_acm_write(const uint8_t *data, uint32_t len);
 
 #ifdef __cplusplus

@@ -1,6 +1,6 @@
 /**
  * @file rdss.c
- * @brief TD3050：电源 / PWI 波束 / 可选 PA / CCTCQ / FKI / CCICR·BDICP / 透传
+ * @brief TD3050：电源 / PWI 波束 / 5V 随 RDSS 上电 / CCTCQ / FKI / CCICR·BDICP / 透传
  */
 #include <rtthread.h>
 #include <rtdevice.h>
@@ -145,18 +145,14 @@ static void rdss_pa_off(void)
     }
 }
 
-static void rdss_pa_on_if_cfg(void)
+static void rdss_pa_on(void)
 {
-    if (cfg_get_pa_enable() && !s_pa_on)
+    if (s_pa_on)
     {
-        PIN_RESET(EN_5V_PA_POW_PORT, EN_5V_PA_POW_PIN);
-        s_pa_on = 1;
-        rt_kprintf("[RDSS] PA on\n");
+        return;
     }
-    else if (!cfg_get_pa_enable())
-    {
-        rt_kprintf("[RDSS] PA skipped (cfg pa_enable=0)\n");
-    }
+    PIN_RESET(EN_5V_PA_POW_PORT, EN_5V_PA_POW_PIN);
+    s_pa_on = 1;
 }
 
 static void rdss_power_on(void)
@@ -169,6 +165,7 @@ static void rdss_power_on(void)
     pwr_plna_acquire();
     PIN_SET(EN_LNA_RDSS_POW_PORT, EN_LNA_RDSS_POW_PIN);
     PIN_RESET(EN_PRDSS_POW_PORT, EN_PRDSS_POW_PIN);
+    rdss_pa_on();
     s_pwr_on = 1;
     rt_thread_mdelay(RDSS_PWR_STABLE_MS);
     (void)rdss_uart_open();
@@ -687,7 +684,6 @@ static void rdss_thread_entry(void *param)
 
         if ((s_state == RDSS_ST_BEAM_WAIT) && s_beam_ok)
         {
-            rdss_pa_on_if_cfg();
             if (rdss_send_cctcq(cfg_get_recv_id(), s_tx_payload, s_tx_len) < 0)
             {
                 rdss_power_off();

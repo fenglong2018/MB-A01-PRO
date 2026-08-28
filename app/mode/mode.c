@@ -54,8 +54,7 @@ static uint8_t s_pt_flags;
 static uint8_t s_pt_req_flags;
 static rt_tick_t s_batt_deadline;
 static rt_uint8_t s_batt_armed;
-static rt_uint8_t s_on_nosim_shots; /* ON 连续无卡空过拍数 */
-static rt_uint8_t s_nosim_hint;     /* 无卡 ON 正在 5s 灯提示，尚未假关机 */
+static rt_uint8_t s_nosim_hint;     /* 无卡 ON 正在 5s 灯提示，尚未真关机 */
 static rt_tick_t s_nosim_hint_deadline;
 static rt_uint8_t s_ready;
 static rt_uint8_t s_evt_ok;
@@ -71,6 +70,7 @@ static int usb_is_present(void);
 static void handle_bat_warn(void);
 static void batt_disarm(void);
 static void enter_fake_off(void);
+static void enter_off_from_on(void);
 static void hw_off_rails_led(void);
 
 static mode_state_t mode_led_view(void)
@@ -536,11 +536,22 @@ static void handle_nosim_hint_to(void)
         return;
     }
     nosim_hint_disarm();
-    if (s_state == MODE_ST_ON)
+    if (s_state != MODE_ST_ON)
     {
-        rt_kprintf("[MODE] ON no-SIM hint done -> FAKE_OFF\n");
-        enter_fake_off();
+        return;
     }
+    if (usb_is_present())
+    {
+        return;
+    }
+    if (sim_present())
+    {
+        on_led_rtc_begin();
+        enter_fake_off();
+        return;
+    }
+    rt_kprintf("[MODE] ON no-SIM hint done -> OFF\n");
+    enter_off_from_on();
 }
 #else
 static void nosim_hint_arm(void)
@@ -550,9 +561,9 @@ static void nosim_hint_arm(void)
 static void handle_nosim_hint_to(void)
 {
     nosim_hint_disarm();
-    if (s_state == MODE_ST_ON)
+    if ((s_state == MODE_ST_ON) && !usb_is_present() && !sim_present())
     {
-        enter_fake_off();
+        enter_off_from_on();
     }
 }
 #endif
@@ -694,7 +705,6 @@ static void enter_force_off(void)
 
     batt_disarm();
     s_batt_from_alarm = 0;
-    s_on_nosim_shots = 0;
     nosim_hint_disarm();
     s_fake_resume = MODE_ST_OFF;
     s_alarm_unix = 0;
@@ -741,7 +751,6 @@ static void enter_alarm(mode_state_t from)
     }
     batt_disarm();
     s_batt_from_alarm = 0;
-    s_on_nosim_shots = 0;
     nosim_hint_disarm();
     if (from == MODE_ST_LOW_BATT)
     {
@@ -783,7 +792,6 @@ static void enter_charge(mode_state_t from_prev)
     }
     batt_disarm();
     s_batt_from_alarm = 0;
-    s_on_nosim_shots = 0;
     nosim_hint_disarm();
     s_fake_resume = MODE_ST_OFF;
     if (from_prev == MODE_ST_FORCE_OFF)
@@ -932,7 +940,6 @@ static void handle_shot_busy(void)
 static void enter_off_from_on(void)
 {
     session_stop_all();
-    s_on_nosim_shots = 0;
     nosim_hint_disarm();
     s_fake_resume = MODE_ST_OFF;
     hb_stop();
@@ -949,50 +956,27 @@ static void enter_off_from_on(void)
     }
 }
 
-static int on_nosim_off_due(void)
-{
-#if MODE_ON_NOSIM_OFF_MIN == 0
-    return 0;
-#else
-    /* 10min 一拍：第 1 拍 t=0，第 (60/10+1) 拍约满 60min */
-    uint8_t need = (uint8_t)(MODE_ON_NOSIM_OFF_MIN / 10u + 1u);
-
-    return (s_on_nosim_shots >= need) ? 1 : 0;
-#endif
-}
-
 static void handle_shot_idle(void)
 {
     if (s_state == MODE_ST_ON)
     {
         if (session_last_was_nosim())
         {
-            if (s_on_nosim_shots < 255u)
-            {
-                s_on_nosim_shots++;
-            }
-            if (on_nosim_off_due())
-            {
-                rt_kprintf("[MODE] ON no-SIM %umin -> OFF\n",
-                           (unsigned)MODE_ON_NOSIM_OFF_MIN);
-                enter_off_from_on();
-                return;
-            }
 #if MODE_ON_NOSIM_HINT_MS > 0
             if (!s_nosim_hint)
             {
-                rt_kprintf("[MODE] ON no-SIM hint %ums\n",
+                rt_kprintf("[MODE] ON no-SIM hint %ums then OFF\n",
                            (unsigned)MODE_ON_NOSIM_HINT_MS);
                 nosim_hint_arm();
             }
             return;
+#else
+            rt_kprintf("[MODE] ON no-SIM -> OFF\n");
+            enter_off_from_on();
+            return;
 #endif
         }
-        else
-        {
-            s_on_nosim_shots = 0;
-            nosim_hint_disarm();
-        }
+        nosim_hint_disarm();
     }
     enter_fake_off();
 }
@@ -1399,29 +1383,38 @@ static void handle_rtc_wu(void)
 #endif
 }
 
-/** 假关机 ON：插卡开 10s 闪，拔卡灭灯。不改会话节拍。 */
+/** 假关机 ON：插卡开 10s 闪；拔卡无灯可亮，直接真关机。提示窗口内插卡则取消关机。 */
 static void handle_sim(void)
 {
+    if ((s_state == MODE_ST_ON) && s_nosim_hint)
+    {
+        if (sim_present())
+        {
+            nosim_hint_disarm();
+            on_led_rtc_begin();
+            enter_fake_off();
+            rt_kprintf("[MODE] ON no-SIM hint: SIM in -> 10s LED\n");
+        }
+        return;
+    }
     if ((s_state != MODE_ST_FAKE_OFF) || (s_fake_resume != MODE_ST_ON))
     {
         return;
     }
-#if USE_LED
     if (sim_present())
     {
+#if USE_LED
         led_dark_unlock();
         led_wait_rtc_hb(1);
         s_ui_view = (mode_state_t)0xFF;
+#endif
         rt_kprintf("[MODE] FAKE_OFF(ON) SIM in -> 10s LED\n");
     }
     else
     {
-        led_wait_rtc_hb(0);
-        led_output_off();
-        s_ui_view = MODE_ST_OFF;
-        rt_kprintf("[MODE] FAKE_OFF(ON) SIM out -> LED off\n");
+        rt_kprintf("[MODE] FAKE_OFF(ON) SIM out -> OFF\n");
+        enter_off_from_on();
     }
-#endif
 }
 
 static void mode_dispatch(rt_uint32_t set)
@@ -1537,6 +1530,8 @@ static void mode_thread_entry(void *param)
             {
                 handle_nosim_hint_to();
                 mode_ui_sync();
+                pm_run_sync();
+                maybe_stop2();
                 wait = RT_WAITING_FOREVER;
             }
             else
@@ -1608,7 +1603,6 @@ int mode_init(void)
     s_fake_resume = MODE_ST_OFF;
     s_batt_from_alarm = 0;
     s_alarm_unix = 0;
-    s_on_nosim_shots = 0;
     s_nosim_hint = 0;
     s_lb_sent = 0;
     s_pt_flags = 0;
@@ -1662,7 +1656,6 @@ int mode_init(void)
     }
     else if (s_state == MODE_ST_ALARM)
     {
-        /* 保持续告警；USB 不改逻辑告警，但要能出 COM */
 #if USE_USB_CDC
         if (usb_is_present())
         {

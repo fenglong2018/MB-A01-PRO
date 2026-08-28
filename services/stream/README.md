@@ -5,7 +5,8 @@
 
 流程图：[`flow.md`](flow.md)。
 
-> **变更记录（2026-08-19）**  
+> **变更记录（2026-08-25）**  
+> 串口助手开/关见 [`docs/board_bringup.md`](../../docs/board_bringup.md) 第 0.3、7、8 节。  
 > 透传时 MODE 静音 CDC ulog（见 [`../log/README.md`](../log/README.md)）。通道开关仍只走 `stream.set` → `mode_passthru_set`。
 
 ## 通道定义
@@ -34,11 +35,20 @@ stream_list_json(buf, buflen);
 
 ## 与 JSON CLI 的关系
 
-PC 侧用 `stream.list` / `stream.set` / `stream.get`（见 `services/cli/README.md`）。  
+PC 侧用 `stream.list` / `stream.set` / `stream.get`（见 `services/cli/README.md`）。任意串口助手即可：USB CDC、打开 DTR、一行一条 JSON、`\n` 结尾。  
 真正透传数据 **不要** 包进 JSON：模块 UART → `stream_write` → USB CDC（与 CLI 同一 COM）。PC 发非 `{` 行 → 模块 UART；以 `{` 开头的行仍是 CLI（用来 `stream.set` 退出）。  
 进 `PASSTHRU` 后 CDC ulog 默认静音，COM 上主要是模块句；退出后日志恢复。需要透传时仍看 ulog：先 `log.cdc` `passthru_mute:0`。
 
-上板步骤见 [`docs/board_bringup.md`](../../docs/board_bringup.md)。
+```json
+{"id":3,"cmd":"stream.set","name":"gnss","enable":1}
+{"id":4,"cmd":"stream.set","name":"rdss","enable":1}
+{"id":6,"cmd":"stream.set","name":"gnss","enable":0}
+{"id":7,"cmd":"stream.set","name":"rdss","enable":0}
+```
+
+建议一次只开一个。`OFF` / `ALARM` / 保护不能进。两个通道都开过，须两个都 `enable:0` 才退出 `PASSTHRU`。
+
+上板步骤见 [`docs/board_bringup.md`](../../docs/board_bringup.md) 第 0.3、7、8 节。
 
 ## GNSS / RDSS 接入步骤（预留）
 
