@@ -9,6 +9,9 @@
 extern "C" {
 #endif
 
+/** 复位后 GPIO 浮空前立刻拉灭低亮 LED。Reset_Handler 在 SystemInit 之前调用，不碰 .bss */
+void board_gpio_hold_leds_off(void);
+
 /** 须在 GNSS/RDSS/LED 模块 init 之前调用（rt_hw_init 内） */
 void board_gpio_early_init(void);
 

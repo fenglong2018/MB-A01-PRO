@@ -63,7 +63,7 @@ extern "C" {
 
 /** 充电满电常亮阈值 */
 #ifndef LED_CHARGE_FULL_PCT
-#define LED_CHARGE_FULL_PCT     98
+#define LED_CHARGE_FULL_PCT     96
 #endif
 
 /** 消息 kind */

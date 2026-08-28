@@ -38,7 +38,7 @@
 #include "hw_config.h"
 
 __IO uint32_t bDeviceState = UNCONNECTED; /* USB device status */
-__IO bool fSuspendEnabled  = false; /* 对齐旧透传：枚举前禁止 suspend */
+__IO bool fSuspendEnabled  = false; /* 枚举前禁止 Suspend，对齐 CherryUSB */
 __IO uint32_t EP[8];
 
 struct
@@ -66,7 +66,7 @@ USB_Result PowerOn(void)
     /*** CNTR_PWDN = 0 ***/
     wRegVal = CTRL_FRST;
     _SetCNTR(wRegVal);
-    /* PDWN 随 FRES 清零后收发器要稳定一会儿（对齐 CherryUSB usb_dc_init） */
+    /* 对齐 CherryUSB usb_dc_init：FRES 后收发器要稳定一会儿 */
     for (i = 0u; i < 72000u; i++)
     {
         __asm volatile("nop");
@@ -77,7 +77,7 @@ USB_Result PowerOn(void)
     _SetCNTR(wInterrupt_Mask);
     /*** Clear pending interrupts ***/
     _SetISTR(0);
-    /*** Set interrupt mask：枚举前不开 SUSPDM ***/
+    /*** 枚举前不开 SUSPDM（CherryUSB：CTRM|WKUPM|ERRM|RESETM） ***/
     wInterrupt_Mask = CTRL_RSTM | CTRL_WKUPM;
     _SetCNTR(wInterrupt_Mask);
 

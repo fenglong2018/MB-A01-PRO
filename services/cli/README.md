@@ -5,7 +5,11 @@
 
 收包流程图：[`flow.md`](flow.md)。模块总表：[`docs/module_status.md`](../../docs/module_status.md)。
 
-> **变更记录（2026-08-19）**  
+> **变更记录（2026-08-27）**  
+> `io.list/get/set` 接到真实 GPIO。`val` 为脚电平。  
+>
+> **变更记录（2026-08-25）**  
+> `stream.*` 补串口助手开/关透传步骤。  
 > 增加 `log.cdc`（透传静音 CDC ulog，仅 RAM）。`log.lvl` / `cfg.*` 行为不变。
 
 ## 开关
@@ -22,8 +26,8 @@
 
 ## 使用前
 
-1. `make flash` 后插 USB，打开对应 COM  
-2. 串口工具打开口（置 DTR），再发命令  
+1. `make flash` 后插 USB，打开对应 COM（USB CDC 虚拟串口；波特率填 115200 8N1 即可）  
+2. 串口工具打开口（**置 DTR**），再发命令；不要和 `shy_host` 同时占同一 COM  
 3. 命令以 `\n` 或 `\r\n` 结尾，**一行一条**
 
 ## 命令示例
@@ -57,7 +61,21 @@
 {"id":24,"cmd":"test.pm","lock":1}
 {"id":25,"cmd":"test.pm","unlock":1}
 {"id":26,"cmd":"test.pm","hold_ms":3000}
+{"id":29,"cmd":"test.clk"}
 ```
+
+`test.clk` 回 `hse_ok / sysclk / pll / usb`。`hse_ok:0` 表示 HSE 晶振没起振，系统已退到
+HSI/2 × 18 = 72M 兜底（USB 取 PLL/1.5 仍是 48M），这时应查外部 32M 晶振与负载电容。
+
+同时回一组 USB 枚举计数，用来把失败定位到哪一层：
+
+| 字段 | 含义 | 判读 |
+| --- | --- | --- |
+| `usb_rst` | 收到主机 RESET 次数 | 为 0 说明主机没看到设备（上拉/供电） |
+| `usb_sof` | 成功解出的 SOF 包数 | 有 RESET 但为 0，说明收发器一个包都解不出来，是物理层 |
+| `usb_err` | 总线错误中断数 | 和 `usb_irq` 接近即每个包都收错 |
+| `usb_ctr` | EP0 完成的控制传输数 | 为 0 说明 SETUP 没进来 |
+| `usb_desc` | 设备描述符被取走的次数 | 大于 0 说明我们答了但主机不认，查描述符内容 |
 
 ### 应答
 
@@ -91,16 +109,17 @@
 | 字段 | 默认 | 含义 |
 |------|------|------|
 | `recv_id` | 13500001 | 短报文收信卡号 |
-| `pa_enable` | 0 | 有效波束后是否开 PA |
+| `pa_enable` | 0 | 仅 RAM；**本版不挡 5V**（RDSS 上电即开）。规格：5V=发射 PA，接收不必开；下一版再试 |
 | `device_id` | 1325000001 | 设备编号（Flash）；RDSS `$BDICP` 不覆盖 |
-| `charge_offset_mv` | 100 | 充电查表压差（mV），0=关；上限 500 |
+| `charge_offset_mv` | 0 | 充电查表压差（mV），0=关；上限 500 |
+| `adc_vdda_mv` | 3300 | ADC 满量程校准（当 VDDA，mV），2500～4000；不采内部 1.2V |
 | `hw_ver` | 空 | 硬件版本；`cfg.set` 可写出厂值 |
 | `sw_ver` | `v0.2` | 固件宏 `CFG_SW_VER`，只读 |
 | `upgrade_unix` | 0 | OTA 预留，只读 |
 | `bd_card` | 0 | 当前北斗卡（号变才写 Flash） |
 | `first_fix_unix` | 0 | 首次有效定位 Unix（GNSS RMC） |
 
-JSON **只增字段、不改旧字段**。`cfg.set` 可不带 `charge_offset_mv`（板端保持原值）。`tools/host_pc` V0.2 配置页可改偏移。
+JSON **只增字段、不改旧字段**。`cfg.set` 可不带 `charge_offset_mv` / `adc_vdda_mv`（板端保持原值）。`tools/host_pc` V0.2 配置页可改偏移和满量程校准。
 
 短报文 MBA01 电量仍为 2 位 `00`～`99`，与 CLI 变更无关。
 
@@ -124,12 +143,29 @@ JSON **只增字段、不改旧字段**。`cfg.set` 可不带 `charge_offset_mv`
 
 ### io.*
 
-白名单见 `cli_io.c`。骨架阶段多为 `ready:0`，`io.set`/`io.get` 返回 `not_ready`。  
-接上 GPIO 后把对应项 `ready` 置 1 并实现读写即可。上板时电源轨用会话触发后万用表量，见 [`docs/board_bringup.md`](../../docs/board_bringup.md)。
+白名单见 `cli_io.c`，已接真实 GPIO。`val` 是脚电平 0/1。  
+`EN_5V` / `EN_PGNSS` / `EN_PRDSS` / LED 低有效。CHARGE 下灯动画会覆盖 LED 写入；会话会改电源脚。
 
 ### stream.*
 
-见 [`../stream/README.md`](../stream/README.md)。`USE_GNSS`/`USE_RDSS` 为 1 时 `built:1`。
+见 [`../stream/README.md`](../stream/README.md)。`USE_GNSS`/`USE_RDSS` 为 1 时 `built:1`。串口助手逐步操作见 [`docs/board_bringup.md`](../../docs/board_bringup.md) 第 0.3、7、8 节。
+
+| 命令 | 作用 |
+|------|------|
+| `stream.set` `name` + `enable` | `1`=开该通道透传，`0`=关。进 `PASSTHRU`；通道全关才退出 |
+| `stream.get` | 该通道 `built` / `enable` |
+| `stream.list` | 三通道一览 |
+
+**开 GNSS / 开 RDSS / 关：**
+
+```json
+{"id":3,"cmd":"stream.set","name":"gnss","enable":1}
+{"id":4,"cmd":"stream.set","name":"rdss","enable":1}
+{"id":6,"cmd":"stream.set","name":"gnss","enable":0}
+{"id":7,"cmd":"stream.set","name":"rdss","enable":0}
+```
+
+建议一次只开一个。`OFF` / `ALARM` / 保护拒绝进入。透传中非 `{` 行写给模块；关透传必须发 `{` 开头的 JSON。不关则 `test.gnss.fix` / `test.rdss.*` 会 `busy_passthru`。
 
 ## 文件
 

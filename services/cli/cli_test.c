@@ -8,6 +8,8 @@
 #include "mode.h"
 #include "session_alarm.h"
 #include "board_pins.h"
+#include "board_clock.h"
+#include "usb_hw.h"
 #include "cfg.h"
 
 #include <rtthread.h>
@@ -391,13 +393,37 @@ int cli_test_handle(const char *cmd, const char *line, int id, char *rsp, int rs
 #endif
     }
 
+    /* ---------- test.clk ---------- */
+    if (strcmp(cmd, "test.clk") == 0)
+    {
+        uint32_t pll = board_clock_pll_hz();
+
+        snprintf(tmp, sizeof(tmp),
+                 "\"hse_ok\":%d,\"sysclk\":%lu,\"pll\":%lu,\"usb\":%lu,"
+                 "\"usb_irq\":%lu,\"usb_rst\":%lu,\"usb_sof\":%lu,\"usb_err\":%lu,"
+                 "\"usb_ctr\":%lu,\"usb_desc\":%lu",
+                 board_clock_hse_ok(),
+                 (unsigned long)SystemCoreClock,
+                 (unsigned long)pll,
+                 (unsigned long)((pll == 72000000u) ? 48000000u
+                                                    : ((pll == 144000000u) ? 48000000u : 0u)),
+                 (unsigned long)g_usb_irq_cnt,
+                 (unsigned long)g_usb_reset_cnt,
+                 (unsigned long)g_usb_sof_cnt,
+                 (unsigned long)g_usb_err_cnt,
+                 (unsigned long)g_usb_ctr_cnt,
+                 (unsigned long)g_usb_desc_cnt);
+        return rsp_ok(rsp, rsp_size, id, tmp);
+    }
+
     /* ---------- test.list ---------- */
     if (strcmp(cmd, "test.list") == 0)
     {
         return rsp_ok(rsp, rsp_size, id,
                       "\"cmds\":[\"mode.get\",\"test.key\",\"test.adc\",\"test.led\","
                       "\"test.gnss.fix\",\"test.rdss.card\",\"test.rdss.send\","
-                      "\"test.session.once\",\"test.rtc\",\"test.pm\",\"test.list\"]");
+                      "\"test.session.once\",\"test.rtc\",\"test.pm\",\"test.clk\","
+                      "\"test.list\"]");
     }
 
     (void)line;

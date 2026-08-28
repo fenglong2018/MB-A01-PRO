@@ -1,12 +1,13 @@
 /**
  * @file cli_io.c
- * @brief 可调试 IO 白名单骨架（列出/读/写）
+ * @brief 调试 IO 白名单：io.list / io.get / io.set 读写真实 GPIO
  *
- * 骨架阶段：表已就绪，真正 GPIO 操作标为 not_ready，避免误拨未初始化脚。
- * 后续在对应项挂上 init + set/get 即可。
+ * val 是脚上电平 0/1，不是“有效”。低有效脚由上位机勾选时取反。
+ * 电源轨会和 GNSS/RDSS 会话抢脚；CHARGE 下 LED 动画会覆盖 LED 写入。
  */
 #include "cli_io.h"
 #include "board_pins.h"
+#include "n32wb452_gpio.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -21,23 +22,24 @@ typedef struct
 {
     const char *name;
     cli_io_dir_t dir;
-    uint8_t ready; /* 1=已接 GPIO 实现 */
+    GPIO_Module *port;
+    uint16_t pin;
 } cli_io_item_t;
 
 static const cli_io_item_t s_io_table[] = {
-    {"EN_5V", CLI_IO_DIR_OUT, 0},
-    {"EN_PLNA_POW", CLI_IO_DIR_OUT, 0},
-    {"EN_LNA_GNSS", CLI_IO_DIR_OUT, 0},
-    {"EN_PGNSS", CLI_IO_DIR_OUT, 0},
-    {"EN_LNA_RDSS", CLI_IO_DIR_OUT, 0},
-    {"EN_PRDSS", CLI_IO_DIR_OUT, 0},
-    {"EN_BLE", CLI_IO_DIR_OUT, 0},
-    {"LED1", CLI_IO_DIR_OUT, 0},
-    {"LED2", CLI_IO_DIR_OUT, 0},
-    {"LED3", CLI_IO_DIR_OUT, 0},
-    {"USB_IN", CLI_IO_DIR_IN, 0},
-    {"SOS_KEY", CLI_IO_DIR_IN, 0},
-    {"FALL_KEY", CLI_IO_DIR_IN, 0},
+    {"EN_5V",       CLI_IO_DIR_OUT, EN_5V_PA_POW_PORT,    EN_5V_PA_POW_PIN},
+    {"EN_PLNA_POW", CLI_IO_DIR_OUT, EN_PLNA_POW_PORT,     EN_PLNA_POW_PIN},
+    {"EN_LNA_GNSS", CLI_IO_DIR_OUT, EN_LNA_POW_GNSS_PORT, EN_LNA_POW_GNSS_PIN},
+    {"EN_PGNSS",    CLI_IO_DIR_OUT, EN_PGNSS_POW_PORT,    EN_PGNSS_POW_PIN},
+    {"EN_LNA_RDSS", CLI_IO_DIR_OUT, EN_LNA_RDSS_POW_PORT, EN_LNA_RDSS_POW_PIN},
+    {"EN_PRDSS",    CLI_IO_DIR_OUT, EN_PRDSS_POW_PORT,    EN_PRDSS_POW_PIN},
+    {"EN_BLE",      CLI_IO_DIR_OUT, EN_BLE_POW_PORT,      EN_BLE_POW_PIN},
+    {"LED1",        CLI_IO_DIR_OUT, LED1_PORT,            LED1_PIN},
+    {"LED2",        CLI_IO_DIR_OUT, LED2_PORT,            LED2_PIN},
+    {"LED3",        CLI_IO_DIR_OUT, LED3_PORT,            LED3_PIN},
+    {"USB_IN",      CLI_IO_DIR_IN,  USB_IN_PORT,          USB_IN_PIN},
+    {"SOS_KEY",     CLI_IO_DIR_IN,  SOS_KEY_PORT,         SOS_KEY_PIN},
+    {"FALL_KEY",    CLI_IO_DIR_IN,  FALL_KEY_PORT,        FALL_KEY_PIN},
 };
 
 static const cli_io_item_t *cli_io_find(const char *pin)
@@ -79,11 +81,10 @@ int cli_io_list_json(char *buf, int buflen)
     for (i = 0; i < (int)(sizeof(s_io_table) / sizeof(s_io_table[0])); i++)
     {
         ret = snprintf(buf + n, (size_t)(buflen - n),
-                       "%s{\"name\":\"%s\",\"dir\":\"%s\",\"ready\":%u}",
+                       "%s{\"name\":\"%s\",\"dir\":\"%s\",\"ready\":1}",
                        (i == 0) ? "" : ",",
                        s_io_table[i].name,
-                       (s_io_table[i].dir == CLI_IO_DIR_OUT) ? "out" : "in",
-                       (unsigned)s_io_table[i].ready);
+                       (s_io_table[i].dir == CLI_IO_DIR_OUT) ? "out" : "in");
         if (ret < 0 || ret >= (buflen - n))
         {
             return -1;
@@ -97,8 +98,6 @@ int cli_io_list_json(char *buf, int buflen)
         return -1;
     }
     n += ret;
-
-    (void)EN_5V_PA_POW_PORT; /* 保持与 board_pins.h 关联，便于后续接线 */
     return n;
 }
 
@@ -110,29 +109,22 @@ int cli_io_get(const char *pin, int *val)
     {
         return -1;
     }
-    if (!item->ready)
-    {
-        return -2; /* not_ready */
-    }
-    return -2;
+    *val = PIN_READ(item->port, item->pin) ? 1 : 0;
+    return 0;
 }
 
 int cli_io_set(const char *pin, int val)
 {
     const cli_io_item_t *item = cli_io_find(pin);
 
-    (void)val;
     if (item == NULL)
     {
         return -1;
     }
     if (item->dir != CLI_IO_DIR_OUT)
     {
-        return -3; /* readonly */
+        return -3;
     }
-    if (!item->ready)
-    {
-        return -2;
-    }
-    return -2;
+    PIN_WRITE(item->port, item->pin, val ? 1 : 0);
+    return 0;
 }

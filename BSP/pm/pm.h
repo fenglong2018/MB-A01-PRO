@@ -18,8 +18,8 @@ extern "C" {
  * MODE 非 FAKE_OFF 时会持有一层；会话发信、nvflash、KEY 滤波再叠。
  * pm 不依赖 mode/gnss，由上层自行配对，避免循环包含。
  *
- * USB 线插入不走 lock：idle 读 board_usb_inserted()。
- * STOP0 会停 PLL，USB 48M 无法单独保留，有 VBUS 则整段不睡。
+ * USB 不走 lock：idle 读 PA7，或 CDC 已 start（防脚抖进 STOP0 掐 48M）。
+ * STOP0 会停 PLL，USB 48M 无法单独保留。
  */
 void pm_lock(void);
 void pm_unlock(void);

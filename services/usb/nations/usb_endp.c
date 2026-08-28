@@ -40,6 +40,7 @@
 #include "hw_config.h"
 #include "usb_istr.h"
 #include "usb_pwr.h"
+#include "usb_hw.h"
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -143,6 +144,8 @@ void EP3_OUT_Callback(void)
 void SOF_Callback(void)
 {
     static uint32_t FrameCount = 0;
+
+    g_usb_sof_cnt++;
 
     if(bDeviceState == CONFIGURED)
     {

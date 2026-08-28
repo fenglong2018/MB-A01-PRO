@@ -132,7 +132,8 @@ stateDiagram-v2
 | `gnss_passthru_enter/exit` | CLI/stream | 透传进出 |
 | `stream` 通道 `gnss` | 透传数据 | `USE_GNSS=1` 时 `built:1`；`stream.set` 联通透传 |
 
-CLI `test.gnss.fix` 可自测；应答含 `unix`（无 RMC 则为 0）。**不**因此写 RTC（产品校时只走 session 的 ON/ALARM 策略）。
+CLI `test.gnss.fix` 可自测；应答含 `unix`（无 RMC 则为 0）。**不**因此写 RTC（产品校时只走 session 的 ON/ALARM 策略）。  
+串口助手开/关 GNSS 透传：[`docs/board_bringup.md`](../../docs/board_bringup.md) 第 0.3、7 节。
 
 ---
 

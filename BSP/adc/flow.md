@@ -11,7 +11,7 @@ flowchart TD
   B -->|离 CHARGE / PASSTHRU pause| F[停周期 不采]
   B -->|FAKE_OFF RTC 10s request| D
   B -->|session sample_wait| D
-  C --> G[Vref 算 VDDA]
+  C --> G["adc_vdda_mv × raw / 4095"]
   D --> G
   E --> G
   G --> H[AD_BAT → Vbat_mV]

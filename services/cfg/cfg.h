@@ -18,10 +18,20 @@ extern "C" {
 #define CFG_DEFAULT_DEVICE_ID   1325000001u
 #endif
 #ifndef CFG_DEFAULT_CHARGE_OFFSET_MV
-#define CFG_DEFAULT_CHARGE_OFFSET_MV    100u
+#define CFG_DEFAULT_CHARGE_OFFSET_MV    0u
 #endif
 #ifndef CFG_CHARGE_OFFSET_MV_MAX
 #define CFG_CHARGE_OFFSET_MV_MAX        500u
+#endif
+/** ADC 满量程校准（mV），当 VDDA；不采内部 1.2V */
+#ifndef CFG_DEFAULT_ADC_VDDA_MV
+#define CFG_DEFAULT_ADC_VDDA_MV         3300u
+#endif
+#ifndef CFG_ADC_VDDA_MV_MIN
+#define CFG_ADC_VDDA_MV_MIN             2500u
+#endif
+#ifndef CFG_ADC_VDDA_MV_MAX
+#define CFG_ADC_VDDA_MV_MAX             4000u
 #endif
 #ifndef CFG_BD_SLOTS
 #define CFG_BD_SLOTS            4u
@@ -56,6 +66,9 @@ void     cfg_set_device_id(uint32_t id);
 
 uint16_t cfg_get_charge_offset_mv(void);
 void     cfg_set_charge_offset_mv(uint16_t mv);
+
+uint16_t cfg_get_adc_vdda_mv(void);
+void     cfg_set_adc_vdda_mv(uint16_t mv);
 
 /** $BDICP：只改当前北斗卡 RAM；号变了才进 Flash 历史槽 */
 void     cfg_note_bd_card(uint32_t id);

@@ -2,9 +2,11 @@
 
 流程图：[`flow.md`](flow.md)。用法：`{"cmd":"test.led","mode":4,"pct":50}`。
 
-> **变更记录（2026-08-25）**  
+> **变更记录（2026-08-27）**  
+> 复位后 GPIO 浮空，低亮 LED3(PB2) 会被 3.3V 灌亮（上电、STOP2 按 SOS 软件复位都会）。`Reset_Handler` 在 `SystemInit` 之前把三灯拉灭。  
+>  
 > BATT：5 秒从进看电算，流水后最后一档保持到窗口结束；二次 BATT 消息不重播。看电窗口内 MODE 不进 LOW_BATT。  
-> ON 有卡从进 ON 起 RTC 10s 闪。假关机打 100ms 脉冲时 `pm_lock`，避免 STOP0 把灯冻在常亮。无卡 ON：5s 内每秒三灯 100ms，再灭灯假关机。`FAKE_OFF←ALARM` 仍 RTC 10s 双闪。  
+> ON 有卡从进 ON 起 RTC 10s 闪。假关机打 100ms 脉冲时 `pm_lock`，避免 STOP0 把灯冻在常亮。无卡 ON：5s 内每秒三灯 100ms，再真关机灭灯。`FAKE_OFF←ALARM` 仍 RTC 10s 双闪。  
 >
 > **变更记录（2026-08-24）**  
 > STOP0 只在 `FAKE_OFF`。BATT 看电是 RUN，流水靠 tick。  
@@ -62,7 +64,7 @@ stateDiagram-v2
     }
 ```
 
-`FAKE_OFF←ALARM` 走 ALARM 双闪，RTC 10s 投 `LED_MSG_HB`；`led_wait_rtc_hb(1)` 后不再用 tick 空等。`FAKE_OFF←ON` **有卡**同样等 RTC 打 100ms；无卡视图是 OFF，心跳不打灯。
+`FAKE_OFF←ALARM` 走 ALARM 双闪，RTC 10s 投 `LED_MSG_HB`；`led_wait_rtc_hb(1)` 后不再用 tick 空等。`FAKE_OFF←ON` **有卡**同样等 RTC 打 100ms。无卡 ON 提示完进真 `OFF`，不挂假关机。
 
 ### 流水（档位 30% / 70%）
 

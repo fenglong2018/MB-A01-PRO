@@ -13,6 +13,9 @@
 #include "pm.h"
 #include "board_clock.h"
 #include "board_gpio.h"
+#if USE_USB_CDC
+#include "cdc_io.h"
+#endif
 
 #if USE_PM
 
@@ -55,18 +58,34 @@ static void pm_enter_stop0(void)
     board_clock_resume_after_stop();
 }
 
+static int pm_usb_hold_awake(void)
+{
+    if (board_usb_inserted())
+    {
+        return 1;
+    }
+#if USE_USB_CDC
+    /* PA7 抖动时 CDC 可能已拉 DP；只看脚会 STOP0 把 48M 掐掉，主机无法识别 */
+    if (usb_cdc_is_on())
+    {
+        return 1;
+    }
+#endif
+    return 0;
+}
+
 static void pm_idle_hook(void)
 {
     rt_base_t level;
 
-    /* STOP0 停 PLL，USB 48M(PLL/3) 不能单独留；有线则整段不睡 */
-    if ((s_lock != 0u) || board_usb_inserted())
+    /* STOP0 停 PLL，USB 48M(PLL/3) 不能单独留；有线或 CDC 已起则不睡 */
+    if ((s_lock != 0u) || pm_usb_hold_awake())
     {
         return;
     }
 
     level = rt_hw_interrupt_disable();
-    if ((s_lock != 0u) || board_usb_inserted())
+    if ((s_lock != 0u) || pm_usb_hold_awake())
     {
         rt_hw_interrupt_enable(level);
         return;

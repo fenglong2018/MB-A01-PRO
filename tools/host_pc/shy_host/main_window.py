@@ -55,8 +55,36 @@ IO_PIN_DEFS: list[tuple[str, str]] = [
     ("FALL_KEY", "in"),
 ]
 
-# LED 低电平点亮：勾选=点亮 → 下发 GPIO=0
-IO_ACTIVE_LOW_PINS = frozenset({"LED1", "LED2", "LED3"})
+# 勾选=有效/点亮 → 下发 GPIO=0。LED 低亮；EN_5V/PGNSS/PRDSS 低有效开（OFF_LEVEL=1）
+IO_ACTIVE_LOW_PINS = frozenset({
+    "LED1", "LED2", "LED3",
+    "EN_5V", "EN_PGNSS", "EN_PRDSS",
+})
+IO_LED_PINS = frozenset({"LED1", "LED2", "LED3"})
+
+# 与 app/mode/mode.h MODE_PT_* 一致
+PT_GNSS = 1
+PT_RDSS = 2
+
+
+def pt_bit(name: str) -> int:
+    if name == "gnss":
+        return PT_GNSS
+    if name == "rdss":
+        return PT_RDSS
+    return 0
+
+
+def fmt_pt(pt: int) -> str:
+    pt = int(pt or 0)
+    parts: list[str] = []
+    if pt & PT_GNSS:
+        parts.append("GNSS")
+    if pt & PT_RDSS:
+        parts.append("RDSS")
+    if not parts:
+        return "0 关"
+    return f"{pt} {'+'.join(parts)}"
 
 
 def io_logical_to_hw(pin: str, logical_on: bool) -> int:
@@ -72,6 +100,18 @@ def io_hw_to_logical(pin: str, hw_val: int | bool) -> bool:
     if pin in IO_ACTIVE_LOW_PINS:
         return v == 0
     return v != 0
+
+
+def fmt_serial_write_err(exc: BaseException) -> str:
+    """WriteFile 失败是 USB 口没写出，不是板端 unknown_pin。"""
+    msg = str(exc)
+    if "WriteFile" in msg or "设备不识别此命令" in msg:
+        return (
+            "USB CDC 写出失败，命令没到板子（不是脚名不认识）。\n"
+            "请点断开再连接，或拔插 USB 后重连。\n\n"
+            f"{exc}"
+        )
+    return msg
 
 
 class Bridge(QObject):
@@ -102,6 +142,11 @@ class MainWindow(QMainWindow):
         self._io_ready: dict[str, int] = {}
         self._radio = RadioParser()
         self._radio_dirty = False
+        self._pt_flags = 0
+        self._pt_pending_open: str | None = None
+        self._pt_pending_tries = 0
+        self._pt_expect_name: str | None = None
+        self._pt_expect_deadline = 0.0
 
         self._build_ui()
         self._apply_style()
@@ -200,7 +245,7 @@ class MainWindow(QMainWindow):
         self.lbl_rtc = QLabel("-")
         self.lbl_pm = QLabel("-")
         form.addRow("MODE", self.lbl_mode)
-        form.addRow("透传 flags", self.lbl_pt)
+        form.addRow("透传", self.lbl_pt)
         form.addRow("电量", self.lbl_bat)
         form.addRow("RTC", self.lbl_rtc)
         form.addRow("PM lock", self.lbl_pm)
@@ -232,8 +277,13 @@ class MainWindow(QMainWindow):
         self.chk_pa = QCheckBox("有效波束后开 PA")
         self.sp_offset = QSpinBox()
         self.sp_offset.setRange(0, 500)
-        self.sp_offset.setValue(100)
+        self.sp_offset.setValue(0)
         self.sp_offset.setSuffix(" mV")
+        self.sp_vdda = QSpinBox()
+        self.sp_vdda.setRange(2500, 4000)
+        self.sp_vdda.setValue(3300)
+        self.sp_vdda.setSuffix(" mV")
+        self.sp_vdda.setToolTip("ADC 满量程校准，当 VDDA；不采内部 1.2V。表笔偏了就改这个数。")
         self.lbl_bd = QLabel("-")
         self.lbl_first_fix = QLabel("-")
         self.ed_hw = QLineEdit()
@@ -245,6 +295,7 @@ class MainWindow(QMainWindow):
         form.addRow("device_id", self.ed_dev)
         form.addRow("pa_enable", self.chk_pa)
         form.addRow("charge_offset_mv", self.sp_offset)
+        form.addRow("adc_vdda_mv", self.sp_vdda)
         form.addRow("hw_ver", self.ed_hw)
         form.addRow("sw_ver（只读）", self.lbl_sw)
         form.addRow("upgrade_unix（只读）", self.lbl_upgrade)
@@ -303,6 +354,7 @@ class MainWindow(QMainWindow):
 
         warn = QLabel(
             "注意：gnss/rdss/session 自检会阻塞板端 CLI 线程，等待期间请勿连发命令。"
+            "透传占用时这些命令会 busy_passthru，须先在射频页关掉。"
         )
         warn.setWordWrap(True)
         lay.addWidget(warn)
@@ -316,13 +368,9 @@ class MainWindow(QMainWindow):
         ctrl = QHBoxLayout()
         for name, title in (("gnss", "GNSS 透传"), ("rdss", "RDSS 透传")):
             b_on = QPushButton(f"{title} 开")
-            b_on.clicked.connect(
-                lambda _=False, n=name: self._send("stream.set", name=n, enable=1)
-            )
+            b_on.clicked.connect(lambda _=False, n=name: self._pt_set(n, 1))
             b_off = QPushButton(f"{title} 关")
-            b_off.clicked.connect(
-                lambda _=False, n=name: self._send("stream.set", name=n, enable=0)
-            )
+            b_off.clicked.connect(lambda _=False, n=name: self._pt_set(n, 0))
             ctrl.addWidget(b_on)
             ctrl.addWidget(b_off)
         self.chk_pt_mute = QCheckBox("静音 ulog")
@@ -331,9 +379,11 @@ class MainWindow(QMainWindow):
         self.chk_hide_nmea = QCheckBox("日志不刷 NMEA")
         self.chk_hide_nmea.setChecked(True)
         self.chk_hide_nmea.setToolTip("仍解析到本页表格；底部日志不再刷 $ 行")
+        self.lbl_pt_radio = QLabel("当前 0 关")
         self.lbl_cdc = QLabel("held=- mute=-")
         ctrl.addWidget(self.chk_pt_mute)
         ctrl.addWidget(self.chk_hide_nmea)
+        ctrl.addWidget(self.lbl_pt_radio)
         ctrl.addWidget(self.lbl_cdc)
         ctrl.addStretch(1)
         lay.addLayout(ctrl)
@@ -346,9 +396,9 @@ class MainWindow(QMainWindow):
         lay.addWidget(split, 1)
 
         tip = QLabel(
-            "须先开对应透传。GNSS 解析 GSV/GGA（可见星、SNR）；"
-            "RDSS 解析 $BDPWI（波束编号、S2C_d，>40 为有效）。"
-            "一次只开一个通道。关透传发 JSON enable=0。"
+            "与串口助手同一套 stream.set：开/关发 JSON（{ 开头），模块原文不要包 JSON。"
+            "须 CHARGE 或 ON；OFF / ALARM / 保护不能开。建议一次一个通道（开 A 会先关 B）。"
+            "GNSS 解析 GSV/GGA；RDSS 解析 $BDPWI（S2C_d>40 有效）。测完点「关」，否则自检 busy_passthru。"
         )
         tip.setWordWrap(True)
         lay.addWidget(tip)
@@ -403,7 +453,12 @@ class MainWindow(QMainWindow):
         grid_in = QGridLayout(g_in)
         oi = ii = 0
         for name, direction in IO_PIN_DEFS:
-            label = f"{name} (低亮)" if name in IO_ACTIVE_LOW_PINS else name
+            if name in IO_LED_PINS:
+                label = f"{name} (低亮)"
+            elif name in IO_ACTIVE_LOW_PINS:
+                label = f"{name} (低有效)"
+            else:
+                label = name
             chk = QCheckBox(label)
             chk.setTristate(False)
             self._io_checks[name] = chk
@@ -411,7 +466,7 @@ class MainWindow(QMainWindow):
             self._io_ready[name] = 0
             if direction == "out":
                 if name in IO_ACTIVE_LOW_PINS:
-                    chk.setToolTip("低电平点亮：勾选=亮(GPIO0)，取消=灭(GPIO1)")
+                    chk.setToolTip("低有效：勾选=有效(GPIO0)，取消=关(GPIO1)")
                 else:
                     chk.setToolTip("勾选=GPIO1，取消=GPIO0")
                 chk.toggled.connect(
@@ -427,8 +482,8 @@ class MainWindow(QMainWindow):
         lay.addWidget(g_out)
         lay.addWidget(g_in)
         tip = QLabel(
-            "勾选=有效。LED1/2/3 低电平点亮（勾选下发 val=0）。"
-            "板端 io.* 尚未接 GPIO，会 not_ready；电源轨用会话/透传后万用表量，灯用自检 test.led。"
+            "勾选=有效。LED 与 EN_5V/PGNSS/PRDSS 低有效（勾选下发 val=0）。"
+            "CHARGE 时灯动画会盖掉 LED 写入；GNSS/RDSS 会话会改电源脚。"
         )
         tip.setWordWrap(True)
         lay.addWidget(tip)
@@ -519,6 +574,11 @@ class MainWindow(QMainWindow):
             self.chk_poll.setChecked(False)
             self.statusBar().showMessage(f"V{__version__} · 已断开")
             self._append_log("系统", "已断开", kind="sys")
+            self._pt_flags = 0
+            self._pt_pending_open = None
+            self._pt_pending_tries = 0
+            self._pt_expect_name = None
+            self._apply_pt_flags(0)
             self._radio.reset()
             self._radio_dirty = True
             return
@@ -537,6 +597,7 @@ class MainWindow(QMainWindow):
         self._append_log("系统", f"打开 {port}", kind="sys")
         self._send("ping")
         self._send("log.cdc", quiet=True)
+        self._send("mode.get", quiet=True)
         self._send("cfg.get", quiet=True)
 
     def _on_poll_toggled(self, on: bool) -> None:
@@ -558,7 +619,10 @@ class MainWindow(QMainWindow):
         # 避开长阻塞自检占用时的连发：有 pending 则跳过一轮
         if self._pending:
             return
-        for cmd in ("mode.get", "test.adc", "test.rtc", "test.pm"):
+        cmds = ("mode.get",)
+        if self._pt_flags == 0:
+            cmds = ("mode.get", "test.adc", "test.rtc", "test.pm")
+        for cmd in cmds:
             self._send(cmd, quiet=True)
 
     def _cfg_set(self) -> None:
@@ -574,6 +638,7 @@ class MainWindow(QMainWindow):
             "device_id": did,
             "pa_enable": 1 if self.chk_pa.isChecked() else 0,
             "charge_offset_mv": int(self.sp_offset.value()),
+            "adc_vdda_mv": int(self.sp_vdda.value()),
         }
         if hw:
             fields["hw_ver"] = hw
@@ -583,6 +648,46 @@ class MainWindow(QMainWindow):
         if not self._link.is_open:
             return
         self._send("log.cdc", passthru_mute=1 if on else 0)
+
+    def _pt_set(self, name: str, enable: int) -> None:
+        """射频页开/关：与串口助手同一条 stream.set。开 A 时若 B 已开则先关 B。"""
+        if enable:
+            other = "rdss" if name == "gnss" else "gnss"
+            if self._pt_flags & pt_bit(other):
+                self._pt_pending_open = name
+                self._pt_pending_tries = 0
+                self._send("stream.set", name=other, enable=0)
+                return
+        self._pt_pending_open = None
+        self._send("stream.set", name=name, enable=enable)
+
+    def _pt_open_pending(self) -> None:
+        nxt = self._pt_pending_open
+        if not nxt or not self._link.is_open:
+            self._pt_pending_open = None
+            self._pt_pending_tries = 0
+            return
+        other = "rdss" if nxt == "gnss" else "gnss"
+        if (self._pt_flags & pt_bit(other)) and self._pt_pending_tries < 8:
+            self._pt_pending_tries += 1
+            self._send("mode.get", quiet=True)
+            QTimer.singleShot(200, self._pt_open_pending)
+            return
+        self._pt_pending_open = None
+        self._pt_pending_tries = 0
+        self._send("stream.set", name=nxt, enable=1)
+
+    def _apply_pt_flags(self, pt: int) -> None:
+        self._pt_flags = int(pt or 0)
+        text = fmt_pt(self._pt_flags)
+        self.lbl_pt.setText(text)
+        if getattr(self, "lbl_pt_radio", None) is not None:
+            self.lbl_pt_radio.setText(f"当前 {text}")
+
+    def _verify_pt_enter(self) -> None:
+        if not self._link.is_open:
+            return
+        self._send("mode.get", quiet=True)
 
     def _rtc_set(self) -> None:
         try:
@@ -615,7 +720,12 @@ class MainWindow(QMainWindow):
                 chk.blockSignals(False)
             QMessageBox.warning(self, APP_TITLE, "未连接")
             return
-        self._send("io.set", pin=pin, val=io_logical_to_hw(pin, checked))
+        if not self._send("io.set", pin=pin, val=io_logical_to_hw(pin, checked)):
+            chk = self._io_checks.get(pin)
+            if chk is not None:
+                chk.blockSignals(True)
+                chk.setChecked(not checked)
+                chk.blockSignals(False)
 
     def _io_read_all(self) -> None:
         if not self._link.is_open:
@@ -632,19 +742,20 @@ class MainWindow(QMainWindow):
         chk.setChecked(bool(on))
         chk.blockSignals(False)
 
-    def _send(self, cmd: str, quiet: bool = False, **fields: Any) -> None:
+    def _send(self, cmd: str, quiet: bool = False, **fields: Any) -> bool:
         if not self._link.is_open:
             if not quiet:
                 QMessageBox.warning(self, APP_TITLE, "未连接")
-            return
+            return False
         cmd_id = self._ids.next()
         line = build_cmd(cmd, cmd_id, **fields)
         try:
             self._link.write_line(line)
         except Exception as exc:
             if not quiet:
-                QMessageBox.critical(self, APP_TITLE, str(exc))
-            return
+                QMessageBox.critical(self, APP_TITLE, fmt_serial_write_err(exc))
+            self._append_log("系统", f"写出失败 {cmd}: {exc}", kind="sys")
+            return False
         self._pending[cmd_id] = {
             "cmd": cmd,
             "deadline": time.monotonic() + default_timeout_ms(cmd) / 1000.0,
@@ -653,6 +764,7 @@ class MainWindow(QMainWindow):
         }
         if not quiet:
             self._append_log("TX", line, kind="tx")
+        return True
 
     def _save_log(self) -> None:
         from PySide6.QtWidgets import QFileDialog
@@ -711,6 +823,11 @@ class MainWindow(QMainWindow):
                 self.sp_offset.setValue(int(rsp["charge_offset_mv"]))
             except (TypeError, ValueError):
                 pass
+        if "adc_vdda_mv" in rsp:
+            try:
+                self.sp_vdda.setValue(int(rsp["adc_vdda_mv"]))
+            except (TypeError, ValueError):
+                pass
         if "bd_card" in rsp:
             self.lbl_bd.setText(str(rsp["bd_card"]))
         if "first_fix_unix" in rsp:
@@ -743,12 +860,30 @@ class MainWindow(QMainWindow):
     ) -> None:
         ok = bool(rsp.get("ok"))
         fields = fields or {}
+        err = str(rsp.get("err") or "")
+        if (not ok) and err == "busy_passthru":
+            QMessageBox.warning(
+                self,
+                APP_TITLE,
+                "透传占用中，请先在射频页关掉 GNSS/RDSS 透传。",
+            )
+            return
         if cmd == "mode.get" and ok:
             name = rsp.get("name", "?")
             st = rsp.get("state", "?")
-            pt = rsp.get("pt", 0)
+            pt = int(rsp.get("pt", 0) or 0)
             self.lbl_mode.setText(f"{name} ({st})")
-            self.lbl_pt.setText(str(pt))
+            self._apply_pt_flags(pt)
+            expect = self._pt_expect_name
+            if expect and time.monotonic() >= self._pt_expect_deadline:
+                self._pt_expect_name = None
+                if not (self._pt_flags & pt_bit(expect)):
+                    QMessageBox.warning(
+                        self,
+                        APP_TITLE,
+                        "未进入透传。须 USB 充电（CHARGE）或开机（ON）；"
+                        "OFF / ALARM / 保护不能开。",
+                    )
         elif cmd == "test.adc" and ok:
             self.lbl_bat.setText(
                 f"{rsp.get('pct', '?')}%  {rsp.get('mv', '?')} mV  "
@@ -778,10 +913,34 @@ class MainWindow(QMainWindow):
             self.chk_pt_mute.setChecked(bool(mute))
             self.chk_pt_mute.blockSignals(False)
             self.lbl_cdc.setText(f"held={held}  mute={mute}")
-        elif cmd == "stream.set" and ok:
+        elif cmd == "stream.set":
+            name = str(fields.get("name") or rsp.get("name") or "")
+            want_en = fields.get("enable")
+            if not ok:
+                self._pt_pending_open = None
+                self._pt_pending_tries = 0
+                self._pt_expect_name = None
+                QMessageBox.warning(
+                    self, APP_TITLE, f"透传切换失败：{err or 'unknown'}"
+                )
+                return
             self._send("log.cdc", quiet=True)
+            self._send("mode.get", quiet=True)
             self._radio.reset()
             self._radio_dirty = True
+            if want_en:
+                self._pt_expect_name = name
+                self._pt_expect_deadline = time.monotonic() + 0.5
+                QTimer.singleShot(500, self._verify_pt_enter)
+            else:
+                self._pt_expect_name = None
+            if (
+                want_en == 0
+                and self._pt_pending_open
+                and name
+                and name != self._pt_pending_open
+            ):
+                QTimer.singleShot(300, self._pt_open_pending)
         elif cmd == "io.get":
             pin = str(rsp.get("pin") or fields.get("pin") or "")
             if ok and pin and "val" in rsp:
@@ -817,9 +976,12 @@ class MainWindow(QMainWindow):
                         tip += " active-low"
                     chk.setToolTip(tip)
                     # 未就绪仍可勾选尝试；标题后加标记
-                    base = name
-                    if name in IO_ACTIVE_LOW_PINS:
+                    if name in IO_LED_PINS:
                         base = f"{name} (低亮)"
+                    elif name in IO_ACTIVE_LOW_PINS:
+                        base = f"{name} (低有效)"
+                    else:
+                        base = name
                     if not ready:
                         base = f"{base} *"
                     chk.setText(base)

@@ -1,13 +1,12 @@
 /**
  * @file key.c
- * @brief 按键：EXTI → 滤波 → mode_post_event
+ * @brief 四路 IO：EXTI 叫醒并关该路中断 → 10ms 轮询积分 → MODE
  *
- * SOS：短按/长按互斥；滤波中断一次无效则清零并恢复中断。
- * FALL：连续有效 KEY_FILTER_CNT 次确认。
- * USB：双沿；连续稳定 KEY_FILTER_CNT 次后按电平报 USB_IN/USB_OUT。
- * SIM：双沿；低=有卡 高=无卡；更新 sim_present()，插拔投 MODE_EVT_SIM（假关机灯）。
+ * USB / SIM / FALL：有效 +1、无效 −1，反相不清零。确认有效后保持关中断只轮询。
+ * SOS：按下同样积分；松手连续 SOS_REL_CNT 拍才确认（避免短按晚报）。
  */
 #include <rtthread.h>
+#include <rtdevice.h>
 #include <rthw.h>
 #include "config.h"
 #include "key.h"
@@ -20,53 +19,49 @@
 
 #if USE_KEY
 
-typedef enum
+enum
 {
-    SOS_ST_IDLE = 0,
-    SOS_ST_SAMPLE,
-    SOS_ST_WAIT_REL,
-} sos_st_t;
+    HOLD_NONE = 0,
+    HOLD_IN   = 1,
+    HOLD_OUT  = 2
+};
 
-typedef enum
-{
-    FLT_ST_IDLE = 0,
-    FLT_ST_SAMPLE,
-    FLT_ST_WAIT_REL,
-} flt_st_t;
-
+/** USB / SIM / FALL 共用：确认在位后关 IRQ 只轮询 */
 typedef struct
 {
-    flt_st_t   st;
-    rt_uint8_t hit;
-    rt_base_t  pin;
-    int        active_low;
-    const char *name;
-} key_filter_t;
+    rt_base_t pin;
+    int8_t    on_level;
+    uint8_t   in_th;
+    uint8_t   out_th;
+    uint8_t   run;
+    uint8_t   held;
+    uint8_t   in_cnt;
+    uint8_t   out_cnt;
+    uint8_t   idle;
+} hold_t;
 
-/** USB 双沿：稳定在某一电平后上报 */
+/** SOS：按下积分；松手另计 */
 typedef struct
 {
-    flt_st_t   st;
-    rt_uint8_t hit;
-    int        target_lvl; /* -1 未定 */
-    int        last_lvl;   /* 上次已上报电平，-1 表示无 */
-} usb_filter_t;
+    uint8_t   run;
+    uint16_t  press;
+    uint16_t  peak;
+    uint8_t   rel;
+} sos_det_t;
 
 static struct rt_semaphore s_key_sem;
 static volatile rt_uint32_t s_key_pending;
 static struct rt_thread s_key_thread;
 static rt_uint8_t s_key_stack[KEY_THREAD_STACK];
 
-static sos_st_t s_sos_st;
-static rt_uint16_t s_sos_hit;
-static rt_uint8_t s_sos_long_done;
+static sos_det_t s_sos;
+static uint8_t s_sos_long_done;
 static uint8_t s_sos_boot_press;
 
-static key_filter_t s_fall_flt;
-static usb_filter_t s_usb_flt;
-static usb_filter_t s_sim_flt;
-static volatile int s_sim_present = 0; /* 1=有卡（低） */
-static uint8_t s_pm_key;               /* 滤波期间禁止 STOP0，否则 10ms 轮询冻住 */
+static hold_t s_usb;
+static hold_t s_sim;
+static hold_t s_fall;
+static uint8_t s_pm_key;
 
 static rt_base_t key_id_to_pin(board_key_id_t id)
 {
@@ -82,7 +77,126 @@ static rt_base_t key_id_to_pin(board_key_id_t id)
 
 int sim_present(void)
 {
-    return s_sim_present ? 1 : 0;
+    return s_sim.held ? 1 : 0;
+}
+
+int usb_present(void)
+{
+    return s_usb.held ? 1 : 0;
+}
+
+static void hold_clear(hold_t *h)
+{
+    h->run = 0;
+    h->held = 0;
+    h->in_cnt = 0;
+    h->out_cnt = 0;
+    h->idle = 0;
+}
+
+static void hold_cfg(hold_t *h, rt_base_t pin, int on_level,
+                     uint8_t in_th, uint8_t out_th)
+{
+    h->pin = pin;
+    h->on_level = (int8_t)on_level;
+    h->in_th = in_th;
+    h->out_th = out_th;
+    hold_clear(h);
+}
+
+static void hold_start(hold_t *h)
+{
+    rt_pin_mode(h->pin, PIN_MODE_INPUT);
+    h->run = 1;
+    h->held = 0;
+    h->in_cnt = 0;
+    h->out_cnt = 0;
+    h->idle = 0;
+}
+
+static void hold_rearm(hold_t *h)
+{
+    rt_pin_mode(h->pin, PIN_MODE_INPUT);
+    rt_pin_irq_enable(h->pin, PIN_IRQ_ENABLE);
+    hold_clear(h);
+}
+
+static void hold_enter(hold_t *h)
+{
+    if (h->run)
+    {
+        return;
+    }
+    hold_start(h);
+}
+
+static int hold_poll(hold_t *h)
+{
+    int on;
+
+    if (!h->run)
+    {
+        return HOLD_NONE;
+    }
+
+    on = (rt_pin_read(h->pin) == (int)h->on_level) ? 1 : 0;
+
+    if (on)
+    {
+        h->idle = 0;
+        if (h->held)
+        {
+            if (h->out_cnt > 0u)
+            {
+                h->out_cnt--;
+            }
+            return HOLD_NONE;
+        }
+        if (h->in_cnt < h->in_th)
+        {
+            h->in_cnt++;
+        }
+        if (h->in_cnt >= h->in_th)
+        {
+            h->held = 1;
+            h->out_cnt = 0;
+            return HOLD_IN;
+        }
+        return HOLD_NONE;
+    }
+
+    if (h->held)
+    {
+        if (h->out_cnt < h->out_th)
+        {
+            h->out_cnt++;
+        }
+        if (h->out_cnt >= h->out_th)
+        {
+            h->held = 0;
+            h->in_cnt = 0;
+            h->out_cnt = 0;
+            hold_rearm(h);
+            return HOLD_OUT;
+        }
+        return HOLD_NONE;
+    }
+
+    if (h->in_cnt > 0u)
+    {
+        h->in_cnt--;
+        h->idle = 0;
+        return HOLD_NONE;
+    }
+    if (h->idle < 0xFFu)
+    {
+        h->idle++;
+    }
+    if (h->idle >= h->in_th)
+    {
+        hold_rearm(h);
+    }
+    return HOLD_NONE;
 }
 
 static int sos_is_active(void)
@@ -90,12 +204,19 @@ static int sos_is_active(void)
     return (rt_pin_read(SOS_KEY_RT_PIN) == PIN_LOW);
 }
 
+static void sos_clear(void)
+{
+    s_sos.run = 0;
+    s_sos.press = 0;
+    s_sos.peak = 0;
+    s_sos.rel = 0;
+}
+
 static void sos_rearm(void)
 {
     rt_pin_mode(SOS_KEY_RT_PIN, PIN_MODE_INPUT);
     rt_pin_irq_enable(SOS_KEY_RT_PIN, PIN_IRQ_ENABLE);
-    s_sos_st = SOS_ST_IDLE;
-    s_sos_hit = 0;
+    sos_clear();
     s_sos_long_done = 0;
     s_sos_boot_press = 0;
 }
@@ -112,219 +233,131 @@ static void sos_on_long(void)
     mode_post_event(MODE_EVT_SOS_LONG);
 }
 
-static int flt_is_active(const key_filter_t *f)
+static void sos_enter(void)
 {
-    int lvl = rt_pin_read(f->pin);
-
-    if (f->active_low)
+    if (s_sos.run)
     {
-        return (lvl == PIN_LOW);
+        return;
     }
-    return (lvl != PIN_LOW);
+    rt_pin_mode(SOS_KEY_RT_PIN, PIN_MODE_INPUT);
+    s_sos.run = 1;
+    s_sos.press = 0;
+    s_sos.peak = 0;
+    s_sos.rel = 0;
+    s_sos_long_done = 0;
 }
 
-static void flt_rearm(key_filter_t *f)
-{
-    rt_pin_mode(f->pin, PIN_MODE_INPUT);
-    rt_pin_irq_enable(f->pin, PIN_IRQ_ENABLE);
-    f->st = FLT_ST_IDLE;
-    f->hit = 0;
-}
-
-static void flt_enter(key_filter_t *f)
-{
-    rt_pin_mode(f->pin, PIN_MODE_INPUT);
-    f->st = FLT_ST_SAMPLE;
-    f->hit = 0;
-}
-
-static void fall_on_confirm(void)
-{
-    rt_kprintf("[KEY] FALL confirmed\n");
-    mode_post_event(MODE_EVT_FALL);
-}
-
-static void fall_sample_poll(key_filter_t *f)
+static void sos_sample_poll(void)
 {
     int active;
 
-    if (f->st == FLT_ST_IDLE)
+    if (!s_sos.run)
     {
         return;
     }
 
-    active = flt_is_active(f);
-
-    if (f->st == FLT_ST_WAIT_REL)
+    active = sos_is_active();
+    if (active)
     {
-        if (!active)
+        s_sos.rel = 0;
+        if (s_sos.press < SOS_LONG_CNT)
         {
-            flt_rearm(f);
+            s_sos.press++;
+        }
+        if (s_sos.press > s_sos.peak)
+        {
+            s_sos.peak = s_sos.press;
+        }
+        if (!s_sos_long_done && (s_sos.press >= SOS_LONG_CNT))
+        {
+            s_sos_long_done = 1;
+            sos_on_long();
         }
         return;
     }
 
-    if (!active)
+    if (s_sos.press > 0u)
     {
-        flt_rearm(f);
+        s_sos.press--;
+    }
+    if (s_sos.rel < 0xFFu)
+    {
+        s_sos.rel++;
+    }
+    if (s_sos.rel < SOS_REL_CNT)
+    {
         return;
     }
 
-    if (f->hit < 0xFF)
+    /* 连续约 80ms 无效：确认松开。短按看 peak，避免松手减 8 拍把 24 减没 */
+    if (s_sos_boot_press || s_sos_long_done)
     {
-        f->hit++;
+        sos_rearm();
+        return;
     }
-    if (f->hit >= KEY_FILTER_CNT)
+    if (s_sos.peak >= SOS_SHORT_CNT)
     {
-        fall_on_confirm();
-        f->st = FLT_ST_WAIT_REL;
+        sos_on_short();
     }
-}
-
-static void usb_rearm(void)
-{
-    rt_pin_mode(USB_IN_RT_PIN, PIN_MODE_INPUT);
-    rt_pin_irq_enable(USB_IN_RT_PIN, PIN_IRQ_ENABLE);
-    s_usb_flt.st = FLT_ST_IDLE;
-    s_usb_flt.hit = 0;
-    s_usb_flt.target_lvl = -1;
+    sos_rearm();
 }
 
 static void usb_enter(void)
 {
-    rt_pin_mode(USB_IN_RT_PIN, PIN_MODE_INPUT);
-    s_usb_flt.st = FLT_ST_SAMPLE;
-    s_usb_flt.hit = 0;
-    s_usb_flt.target_lvl = -1;
+    hold_enter(&s_usb);
 }
 
-/**
- * 双沿滤波：连续 KEY_FILTER_CNT 次同一电平则确认。
- * 低=插入 → USB_IN；高=拔出 → USB_OUT。与上次相同则不上报。
- */
 static void usb_sample_poll(void)
 {
-    int lvl;
+    int ev = hold_poll(&s_usb);
 
-    if (s_usb_flt.st != FLT_ST_SAMPLE)
+    if (ev == HOLD_IN)
     {
-        return;
+        rt_kprintf("[KEY] USB_IN\n");
+        mode_post_event(MODE_EVT_USB_IN);
     }
-
-    lvl = rt_pin_read(USB_IN_RT_PIN);
-
-    if (s_usb_flt.target_lvl < 0)
+    else if (ev == HOLD_OUT)
     {
-        s_usb_flt.target_lvl = lvl;
-        s_usb_flt.hit = 1;
-        return;
+        rt_kprintf("[KEY] USB_OUT\n");
+        mode_post_event(MODE_EVT_USB_OUT);
     }
-
-    if (lvl != s_usb_flt.target_lvl)
-    {
-        usb_rearm();
-        return;
-    }
-
-    if (s_usb_flt.hit < 0xFF)
-    {
-        s_usb_flt.hit++;
-    }
-
-    if (s_usb_flt.hit < KEY_FILTER_CNT)
-    {
-        return;
-    }
-
-    if (s_usb_flt.target_lvl != s_usb_flt.last_lvl)
-    {
-        if (s_usb_flt.target_lvl == PIN_LOW)
-        {
-            rt_kprintf("[KEY] USB_IN\n");
-            mode_post_event(MODE_EVT_USB_IN);
-        }
-        else
-        {
-            rt_kprintf("[KEY] USB_OUT\n");
-            mode_post_event(MODE_EVT_USB_OUT);
-        }
-        s_usb_flt.last_lvl = s_usb_flt.target_lvl;
-    }
-    usb_rearm();
-}
-
-static void sim_rearm(void)
-{
-    rt_pin_mode(RD_BD_SIMCARD_RT_PIN, PIN_MODE_INPUT);
-    rt_pin_irq_enable(RD_BD_SIMCARD_RT_PIN, PIN_IRQ_ENABLE);
-    s_sim_flt.st = FLT_ST_IDLE;
-    s_sim_flt.hit = 0;
-    s_sim_flt.target_lvl = -1;
 }
 
 static void sim_enter(void)
 {
-    rt_pin_mode(RD_BD_SIMCARD_RT_PIN, PIN_MODE_INPUT);
-    s_sim_flt.st = FLT_ST_SAMPLE;
-    s_sim_flt.hit = 0;
-    s_sim_flt.target_lvl = -1;
+    hold_enter(&s_sim);
 }
 
-/**
- * SIM 双沿滤波：连续 KEY_FILTER_CNT 次同一电平确认。
- * 低=有卡；高=无卡。仅更新 sim_present + 日志。
- */
 static void sim_sample_poll(void)
 {
-    int lvl;
+    int ev = hold_poll(&s_sim);
 
-    if (s_sim_flt.st != FLT_ST_SAMPLE)
+    if (ev == HOLD_IN)
     {
-        return;
+        rt_kprintf("[KEY] SIM_IN (card present)\n");
+        mode_post_event(MODE_EVT_SIM);
     }
-
-    lvl = rt_pin_read(RD_BD_SIMCARD_RT_PIN);
-
-    if (s_sim_flt.target_lvl < 0)
+    else if (ev == HOLD_OUT)
     {
-        s_sim_flt.target_lvl = lvl;
-        s_sim_flt.hit = 1;
-        return;
+        rt_kprintf("[KEY] SIM_OUT (no card)\n");
+        mode_post_event(MODE_EVT_SIM);
     }
+}
 
-    if (lvl != s_sim_flt.target_lvl)
-    {
-        sim_rearm();
-        return;
-    }
+static void fall_enter(void)
+{
+    hold_enter(&s_fall);
+}
 
-    if (s_sim_flt.hit < 0xFF)
-    {
-        s_sim_flt.hit++;
-    }
+static void fall_sample_poll(void)
+{
+    int ev = hold_poll(&s_fall);
 
-    if (s_sim_flt.hit < KEY_FILTER_CNT)
+    if (ev == HOLD_IN)
     {
-        return;
+        rt_kprintf("[KEY] FALL confirmed\n");
+        mode_post_event(MODE_EVT_FALL);
     }
-
-    if (s_sim_flt.target_lvl != s_sim_flt.last_lvl)
-    {
-        if (s_sim_flt.target_lvl == PIN_LOW)
-        {
-            s_sim_present = 1;
-            rt_kprintf("[KEY] SIM_IN (card present)\n");
-            mode_post_event(MODE_EVT_SIM);
-        }
-        else
-        {
-            s_sim_present = 0;
-            rt_kprintf("[KEY] SIM_OUT (no card)\n");
-            mode_post_event(MODE_EVT_SIM);
-        }
-        s_sim_flt.last_lvl = s_sim_flt.target_lvl;
-    }
-    sim_rearm();
 }
 
 static void key_isr_hook(board_key_id_t id, void *user)
@@ -358,10 +391,7 @@ static void key_handle_irq_events(rt_uint32_t pending)
 {
     if (pending & KEY_EVT_SOS)
     {
-        rt_pin_mode(SOS_KEY_RT_PIN, PIN_MODE_INPUT);
-        s_sos_st = SOS_ST_SAMPLE;
-        s_sos_hit = 0;
-        s_sos_long_done = 0;
+        sos_enter();
     }
     if (pending & KEY_EVT_USB_IN)
     {
@@ -369,65 +399,11 @@ static void key_handle_irq_events(rt_uint32_t pending)
     }
     if (pending & KEY_EVT_FALL)
     {
-        flt_enter(&s_fall_flt);
+        fall_enter();
     }
     if (pending & KEY_EVT_SIM)
     {
         sim_enter();
-    }
-}
-
-static void sos_sample_poll(void)
-{
-    int active;
-
-    if (s_sos_st == SOS_ST_IDLE)
-    {
-        return;
-    }
-
-    active = sos_is_active();
-
-    if (s_sos_st == SOS_ST_WAIT_REL)
-    {
-        if (!active)
-        {
-            sos_rearm();
-        }
-        return;
-    }
-
-    if (!active)
-    {
-        if (s_sos_boot_press)
-        {
-            /* 叫醒那一次：MODE 已进 BATT，松手不是第二次短按 */
-            s_sos_boot_press = 0;
-            if (!s_sos_long_done)
-            {
-                sos_rearm();
-                return;
-            }
-        }
-        if (!s_sos_long_done &&
-            (s_sos_hit >= SOS_SHORT_CNT) &&
-            (s_sos_hit < SOS_LONG_CNT))
-        {
-            sos_on_short();
-        }
-        sos_rearm();
-        return;
-    }
-
-    if (s_sos_hit < 0xFFFFu)
-    {
-        s_sos_hit++;
-    }
-    if (!s_sos_long_done && (s_sos_hit >= SOS_LONG_CNT))
-    {
-        s_sos_long_done = 1;
-        sos_on_long();
-        s_sos_st = SOS_ST_WAIT_REL;
     }
 }
 
@@ -437,15 +413,15 @@ int key_is_busy(void)
     {
         return 1;
     }
-    if ((s_sos_st != SOS_ST_IDLE) || (s_fall_flt.st != FLT_ST_IDLE))
+    /* 已确认 USB/SIM 在位只轮询，不挡 STOP2；插入过程仍算忙 */
+    if (s_sos.run || s_fall.run)
     {
         return 1;
     }
-    if ((s_usb_flt.st != FLT_ST_IDLE) || (s_sim_flt.st != FLT_ST_IDLE))
+    if ((s_usb.run && !s_usb.held) || (s_sim.run && !s_sim.held))
     {
         return 1;
     }
-    /* 按着不放也算忙：睡下去就没有新的下降沿了 */
     if (sos_is_active())
     {
         return 1;
@@ -471,9 +447,6 @@ static void key_pm_sync(void)
 #endif
 }
 
-/**
- * 还按着才进 SAMPLE：只认长按。已松开的 SOS 由 MODE 直接进 BATT。
- */
 static void key_take_boot_level(void)
 {
     int sos_down = board_boot_sos_down();
@@ -482,18 +455,25 @@ static void key_take_boot_level(void)
     if (sos_down)
     {
         rt_pin_irq_enable(SOS_KEY_RT_PIN, PIN_IRQ_DISABLE);
-        s_sos_st = SOS_ST_SAMPLE;
-        s_sos_hit = SOS_SHORT_CNT;
-        s_sos_long_done = 0;
+        sos_enter();
         s_sos_boot_press = 1;
         rt_kprintf("[KEY] SOS held at reset (long only)\n");
     }
     if (fall_on)
     {
         rt_pin_irq_enable(FALL_KEY_RT_PIN, PIN_IRQ_DISABLE);
-        flt_enter(&s_fall_flt);
+        fall_enter();
         rt_kprintf("[KEY] FALL active at reset\n");
     }
+
+    /*
+     * USB / SIM 是电平：上电或 STOP2 复位时已经插着则没有沿。
+     * 积分确认插入才报 IN；未插入积满 idle 只 rearm，不上报 OUT。
+     */
+    rt_pin_irq_enable(USB_IN_RT_PIN, PIN_IRQ_DISABLE);
+    usb_enter();
+    rt_pin_irq_enable(RD_BD_SIMCARD_RT_PIN, PIN_IRQ_DISABLE);
+    sim_enter();
 }
 
 static void key_thread_entry(void *param)
@@ -513,7 +493,7 @@ static void key_thread_entry(void *param)
         sos_sample_poll();
         usb_sample_poll();
         sim_sample_poll();
-        fall_sample_poll(&s_fall_flt);
+        fall_sample_poll();
         key_pm_sync();
     }
 }
@@ -522,25 +502,16 @@ int key_init(void)
 {
     rt_err_t err;
 
-    s_sos_st = SOS_ST_IDLE;
-    s_sos_hit = 0;
+    sos_clear();
     s_sos_long_done = 0;
+    s_sos_boot_press = 0;
 
-    s_usb_flt.st = FLT_ST_IDLE;
-    s_usb_flt.hit = 0;
-    s_usb_flt.target_lvl = -1;
-    s_usb_flt.last_lvl = -1;
-
-    s_sim_flt.st = FLT_ST_IDLE;
-    s_sim_flt.hit = 0;
-    s_sim_flt.target_lvl = -1;
-    s_sim_flt.last_lvl = -1;
-
-    s_fall_flt.st = FLT_ST_IDLE;
-    s_fall_flt.hit = 0;
-    s_fall_flt.pin = FALL_KEY_RT_PIN;
-    s_fall_flt.active_low = 0;
-    s_fall_flt.name = "FALL";
+    hold_cfg(&s_usb, USB_IN_RT_PIN, USB_IN_INSERTED_LEVEL,
+             USB_IN_CONFIRM_CNT, USB_OUT_CONFIRM_CNT);
+    hold_cfg(&s_sim, RD_BD_SIMCARD_RT_PIN, PIN_LOW,
+             SIM_IN_CONFIRM_CNT, SIM_OUT_CONFIRM_CNT);
+    hold_cfg(&s_fall, FALL_KEY_RT_PIN, PIN_HIGH,
+             FALL_ON_CONFIRM_CNT, FALL_OFF_CONFIRM_CNT);
 
 #if USE_KEY_IRQ
     if (board_key_irq_init(key_isr_hook, RT_NULL) != 0)
@@ -550,22 +521,13 @@ int key_init(void)
     }
 #endif
 
-    /* 与 mode 上电采样对齐，避免重复 USB_IN */
     rt_pin_mode(USB_IN_RT_PIN, PIN_MODE_INPUT);
-    s_usb_flt.last_lvl = rt_pin_read(USB_IN_RT_PIN);
-
-    /* SIM 初始电平：低=有卡 */
     rt_pin_mode(RD_BD_SIMCARD_RT_PIN, PIN_MODE_INPUT);
-    s_sim_flt.last_lvl = rt_pin_read(RD_BD_SIMCARD_RT_PIN);
-    s_sim_present = (s_sim_flt.last_lvl == PIN_LOW) ? 1 : 0;
-    if (!s_sim_present)
-    {
-        rt_kprintf("[KEY] SIM no card at boot\n");
-    }
+    rt_pin_mode(FALL_KEY_RT_PIN, PIN_MODE_INPUT);
+    rt_pin_mode(SOS_KEY_RT_PIN, PIN_MODE_INPUT);
 
     rt_sem_init(&s_key_sem, "key", 0, RT_IPC_FLAG_FIFO);
 
-    /* 必须在 key 线程起来之前置好，MODE 才能在首次 maybe_stop2 时看到「忙」 */
     key_take_boot_level();
     key_pm_sync();
 
@@ -584,8 +546,13 @@ int key_init(void)
     }
 
     rt_thread_startup(&s_key_thread);
-    rt_kprintf("[KEY] ready poll=%dms filter=%u USB/SIM dual-edge sim=%d\n",
-               KEY_POLL_MS, (unsigned)KEY_FILTER_CNT, s_sim_present);
+    rt_kprintf("[KEY] ready poll=%dms usb=%u/%u sim=%u/%u fall=%u/%u sos=%u/%u rel=%u card=%d\n",
+               KEY_POLL_MS,
+               (unsigned)USB_IN_CONFIRM_CNT, (unsigned)USB_OUT_CONFIRM_CNT,
+               (unsigned)SIM_IN_CONFIRM_CNT, (unsigned)SIM_OUT_CONFIRM_CNT,
+               (unsigned)FALL_ON_CONFIRM_CNT, (unsigned)FALL_OFF_CONFIRM_CNT,
+               (unsigned)SOS_SHORT_CNT, (unsigned)SOS_LONG_CNT,
+               (unsigned)SOS_REL_CNT, s_sim.held);
     return 0;
 }
 
@@ -604,7 +571,12 @@ int key_init(void)
 
 int sim_present(void)
 {
-    return 1; /* 无 KEY 模块时不挡会话 */
+    return 1;
+}
+
+int usb_present(void)
+{
+    return board_usb_inserted();
 }
 
 int key_is_busy(void)

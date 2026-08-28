@@ -1,6 +1,6 @@
 /**
  * @file adc_bat.c
- * @brief 电池 ADC：自校准 + VREFINT 算 VDDA + 分压还原 Vbat
+ * @brief 电池 ADC：满量程用 cfg.adc_vdda_mv（默认 3300）；不采内部 1.2V
  *
  * 上电采 1 次；之后等 MODE/SESSION 通知。充电查表减 charge_offset_mv。
  * 分压源阻高，采样时间取 239.5 cycles。
@@ -24,7 +24,7 @@
 
 #define ADC_FULL_SCALE      4095u
 
-/* Vbat = Vpin * (R16+R17)/R17 = Vpin * 45/33 = Vpin * 15/11 */
+/* Vbat = Vpin * (R16+R17)/R17；现暂用原 15/11（1.2M+3.3M）便于对照 */
 #define BAT_DIV_NUM         15u
 #define BAT_DIV_DEN         11u
 #define ADC_EVT_SAMPLE      (1u << 0)
@@ -210,9 +210,7 @@ static void adc_hw_init(void)
     gpio.GPIO_Mode  = GPIO_Mode_AIN;
     GPIO_InitPeripheral(BAT_ADC_BAT_PORT, &gpio);
 
-    ADC_EnableTempSensorVrefint(ENABLE);
-    adc_unit_init(ADC1); /* VREFINT → VDDA */
-    adc_unit_init(ADC2); /* PA4 AD_BAT */
+    adc_unit_init(ADC2); /* PA4 AD_BAT；满量程用 cfg.adc_vdda_mv */
 }
 
 static void adc_post_done(void)
@@ -224,7 +222,6 @@ static void adc_post_done(void)
 
 static void adc_sample_once(void)
 {
-    uint16_t raw_vref;
     uint16_t raw_bat;
     uint32_t vdda_mv;
     uint32_t vpin_mv;
@@ -233,22 +230,17 @@ static void adc_sample_once(void)
     adc_bat_sample_t smp;
     adc_bat_level_t prev;
 
-    raw_vref = adc_read_avg(ADC1, ADC_CH_INT_VREF, ADC_BAT_AVG_N);
-    raw_bat  = adc_read_avg(BAT_ADC_BAT_ADC, BAT_ADC_BAT_ADC_CH, ADC_BAT_AVG_N);
-
-    if ((raw_vref == 0) || (raw_vref > ADC_FULL_SCALE))
+    raw_bat = adc_read_avg(BAT_ADC_BAT_ADC, BAT_ADC_BAT_ADC_CH, ADC_BAT_AVG_N);
+    vdda_mv = cfg_get_adc_vdda_mv();
+    if ((vdda_mv < CFG_ADC_VDDA_MV_MIN) || (vdda_mv > CFG_ADC_VDDA_MV_MAX))
     {
-        return;
+        vdda_mv = CFG_DEFAULT_ADC_VDDA_MV;
     }
-
-    /* VDDA = VREFINT * FULL / raw_vref */
-    vdda_mv = ((uint32_t)ADC_BAT_VREFINT_MV * ADC_FULL_SCALE) / raw_vref;
     vpin_mv = (vdda_mv * raw_bat) / ADC_FULL_SCALE;
     vbat_mv = (vpin_mv * BAT_DIV_NUM) / BAT_DIV_DEN;
-
     if (vbat_mv > 6000u)
     {
-        vbat_mv = 6000u; /* 异常钳位，避免乱跳 */
+        vbat_mv = 6000u;
     }
 
     charging = s_charging;
@@ -257,7 +249,7 @@ static void adc_sample_once(void)
     smp.vdda_mv     = (uint16_t)vdda_mv;
     smp.vpin_mv     = (uint16_t)vpin_mv;
     smp.raw_bat     = raw_bat;
-    smp.raw_vref    = raw_vref;
+    smp.raw_vref    = 0;
     smp.charging    = charging;
     smp.percent     = percent_from_mv(smp.v_lookup_mv);
     smp.valid       = 1;

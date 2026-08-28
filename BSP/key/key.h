@@ -17,28 +17,39 @@ extern "C" {
 #ifndef KEY_THREAD_PRIO
 #define KEY_THREAD_PRIO         15
 #endif
-/** 任务轮询周期（无中断时也醒来；SOS 采样节拍） */
+/** 任务轮询周期（无中断时也醒来；四路统一采样节拍） */
 #ifndef KEY_POLL_MS
 #define KEY_POLL_MS             10
 #endif
-/** 简单滤波：连续有效 KEY_FILTER_CNT 次后确认，再等无效电平后 rearm */
-#ifndef KEY_FILTER_CNT
-#define KEY_FILTER_CNT          8
+/** USB 插入：积分加到此值确认（≈160ms）；无效只减 1，不清零 */
+#ifndef USB_IN_CONFIRM_CNT
+#define USB_IN_CONFIRM_CNT      8        /* ≈80ms */
 #endif
-/**
- * SOS：连续有效计数（单位 KEY_POLL_MS）。
- * - 达 SOS_LONG_CNT → 仅长按
- * - 未达长按前松手且 hit∈[SOS_SHORT_CNT, SOS_LONG_CNT) → 短按
- * - hit < SOS_SHORT_CNT 即松手 → 抖动，清零并恢复中断
- *
- * 长按要按人手时长给（默认 2s）；给成一两百毫秒的话正常一按就是长按，
- * 短按窗口人手按不出来。
- */
+/** USB 拔出：积分加到此值确认（≈240ms）；又插上只减 1，不清零 */
+#ifndef USB_OUT_CONFIRM_CNT
+#define USB_OUT_CONFIRM_CNT     24
+#endif
+#ifndef SIM_IN_CONFIRM_CNT
+#define SIM_IN_CONFIRM_CNT      16       /* ≈160ms */
+#endif
+#ifndef SIM_OUT_CONFIRM_CNT
+#define SIM_OUT_CONFIRM_CNT     24       /* ≈240ms */
+#endif
+#ifndef FALL_ON_CONFIRM_CNT
+#define FALL_ON_CONFIRM_CNT     16       /* ≈160ms 认定 */
+#endif
+#ifndef FALL_OFF_CONFIRM_CNT
+#define FALL_OFF_CONFIRM_CNT    24       /* ≈240ms 撤销 */
+#endif
 #ifndef SOS_SHORT_CNT
-#define SOS_SHORT_CNT           5       /* ≈50ms 消抖 */
+#define SOS_SHORT_CNT           24       /* ≈240ms */
 #endif
 #ifndef SOS_LONG_CNT
-#define SOS_LONG_CNT            200     /* ≈2s */
+#define SOS_LONG_CNT            (SOS_SHORT_CNT * 10u)  /* ≈2.4s */
+#endif
+/** SOS 确认松开（连续无效）；按下仍用积分加减 */
+#ifndef SOS_REL_CNT
+#define SOS_REL_CNT             8        /* ≈80ms */
 #endif
 
 /** pending 位图：与 board_key_id_t 对应 */
@@ -58,6 +69,12 @@ int key_init(void);
  * 非 MODE 状态；仅能力位，供 session/GNSS/RDSS 门控。
  */
 int sim_present(void);
+
+/**
+ * USB 已确认在位：1=插入积分已满且尚未确认拔出。
+ * CHARGE / STOP2 / 采电跟这个走，不要每圈直接读 PA7。
+ */
+int usb_present(void);
 
 /**
  * 有通道正在滤波（或 SOS 还按着）：1=忙。

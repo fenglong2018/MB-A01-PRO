@@ -1,7 +1,10 @@
 # BSP/adc — 电池电量
 
+> **变更记录（2026-08-28）**  
+> 分压改为 **R16=390k、R17=1.1M**（约 2.8μA @ 4.2V），还原 `Vbat = Vpin × 149/110`。满量程用 `cfg.adc_vdda_mv`（默认 3300）。表笔 4.17V 与软件对齐。
+
 > **变更记录（2026-08-24）**  
-> PA4 改走 **ADC2 CH1**（N32WB452：ADC1 CH4 是 PA3）。VDDA 仍用 ADC1 VREFINT。
+> PA4 改走 **ADC2 CH1**（N32WB452：ADC1 CH4 是 PA3）。  
 > 采集表增加：`FAKE_OFF` RTC 10s 空载 `request()` 1 次（不开 15s）。CHARGE 15s、拔 USB 不采、会话前 `sample_wait` 不变。  
 > 边沿：WARN→`BAT_WARN`；PROTECT→`BAT_PROTECT`；回到 OK→`BAT_OK`（MODE 清 `lb_sent`）。  
 > MODE 受理 WARN：ON / `FAKE_OFF←ON` / OFF / 关机看电；告警不进 `LOW_BATT`。
@@ -31,6 +34,16 @@
 
 GNSS/RDSS 工作中、透传中、KEY/LED **不采**。  
 `OFF` / `FORCE_OFF`：无周期、无采集（STOP2）。冷启动那 1 次空载采样若已是 WARN，由 MODE 决定是否发 1 条 N（BKP `lb_sent` 防 STOP2 重复）。
+
+## 满量程校准（不用内部 1.2V）
+
+```text
+vpin = adc_vdda_mv × raw_bat / 4095
+vbat = vpin × 15/11（对照用；板子已是 390k+1.1M）
+```
+
+`adc_vdda_mv` 默认 **3300**，当 ADC 满量程（VDDA）。表笔比 `test.adc` 的 `mv` 高就**加大**这个数，低就减小。  
+例：软件 4100、表笔 4200 → `3300 × 4200 / 4100 ≈ 3380`，再 `cfg.set`。范围 2500～4000，进 Flash。`test.adc` 的 `vdda` 即当前系数。
 
 ## 充电查表
 

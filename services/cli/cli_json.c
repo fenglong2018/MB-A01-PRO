@@ -344,6 +344,14 @@ int cli_json_handle_line(const char *line, char *rsp, int rsp_size)
                 has = 1;
             }
         }
+        {
+            int vdda = -1;
+            if (json_get_int(line, "adc_vdda_mv", &vdda) == 0)
+            {
+                cfg_set_adc_vdda_mv((uint16_t)vdda);
+                has = 1;
+            }
+        }
         if (json_get_string(line, "hw_ver", pin, sizeof(pin)) == 0)
         {
             cfg_set_hw_ver(pin);

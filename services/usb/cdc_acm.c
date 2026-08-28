@@ -142,6 +142,8 @@ static uint8_t s_cdc_on;
 
 void cdc_acm_init(void)
 {
+    /* 对齐 DEMO main：USB_Interrupts_Config → Set_USBClock → USB_Init */
+    USB_Interrupts_Config();
     Set_USBClock();
     USB_Init();
 }
@@ -156,8 +158,26 @@ void usb_cdc_start(void)
     s_cdc_on = 1;
 }
 
+uint8_t usb_cdc_is_on(void)
+{
+    return s_cdc_on;
+}
+
+uint8_t usb_cdc_is_configured(void)
+{
+    if (!s_cdc_on)
+    {
+        return 0;
+    }
+    return ((bDeviceState == CONFIGURED) || (bDeviceState == SUSPENDED)) ? 1 : 0;
+}
+
 void usb_cdc_stop(void)
 {
+    if (!s_cdc_on)
+    {
+        return;
+    }
     usb_hw_deinit();
     s_cdc_on = 0;
     dtr_enable = 0;

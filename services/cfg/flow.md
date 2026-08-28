@@ -4,7 +4,7 @@
 
 ```json
 {"cmd":"cfg.get"}
-{"cmd":"cfg.set","recv_id":13500001,"device_id":1325000001,"charge_offset_mv":100,"pa_enable":0,"hw_ver":"A1"}
+{"cmd":"cfg.set","recv_id":13500001,"device_id":1325000001,"charge_offset_mv":0,"adc_vdda_mv":3300,"pa_enable":0,"hw_ver":"A1"}
 ```
 
 ```mermaid

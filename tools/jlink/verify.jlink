@@ -1,0 +1,6 @@
+// 请用 make cmp（Makefile 会按当前 build/User.bin 生成脚本并判 SAME/DIFFERENT）
+// 手跑仅作参考：不复位，比完放行
+halt
+verifybin build/User.bin 0x08000000
+go
+qc

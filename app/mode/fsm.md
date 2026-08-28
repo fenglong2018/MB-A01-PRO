@@ -1,9 +1,14 @@
 # 整机模式状态机（按「一个状态一张图」）
 
+> **变更记录（2026-08-27）**  
+> 无卡 ON：5s 每秒 100ms 提示后进真 `OFF`（STOP2），不再假关机挂着。提示窗口内插卡则改走有卡 10s 闪。`FAKE_OFF←ON` 拔卡同样真关机。ALARM 无卡仍假关机 10s 双闪。  
+>
+> **变更记录（2026-08-26）**  
+> USB：插入 8 拍 / 拔出 24 拍，积分加减、反相不清零。确认插入后关 USB-IN 中断只轮询；确认拔出再开中断、关 CDC。CHARGE 期间不重拉 DP。  
+>
 > **变更记录（2026-08-25）**  
 > - 看电 BATT：5 秒从进入算，整段禁止 STOP0/STOP2，流水后最后一档保持到窗口结束。看电窗口内不进 `LOW_BATT`（超时回 OFF 再补）。  
-> ON 有卡：进 ON 即开 RTC 10s 闪（搜星/假关机同一条节拍，不重开计数）。**无卡**先 5s 每秒 100ms，再到 `FAKE_OFF` 灭灯。`FAKE_OFF←ALARM` 仍 10s 双闪。  
-> - ON / `FAKE_OFF←ON` 连续无卡满 60 分钟 → 真 `OFF`（编译期 `MODE_ON_NOSIM_OFF_MIN`，不进 JSON）。ALARM 无卡不自动关机。  
+> ON 有卡：进 ON 即开 RTC 10s 闪（搜星/假关机同一条节拍，不重开计数）。**无卡**先 5s 每秒 100ms，再到真 `OFF`。`FAKE_OFF←ALARM` 仍 10s 双闪。  
 >
 > **变更记录（2026-08-24）**  
 > - 满 72h **不**自动切 ON：仍停 ALARM，灯双闪，报文 A，10min。ON 只从人开机等独立通道进入。  
@@ -35,7 +40,7 @@
 | 物理态 | `mode_state_get()` 的枚举 |
 | 逻辑告警 | 物理 `ALARM`，或 `FAKE_OFF` 且 resume=ALARM，或告警短按叠上的 `BATT` |
 | `BATT_TO` | 事件：看电窗口 5 秒超时（`MODE_EVT_BATT_TO`） |
-| `FAKE_OFF` | 假关机：逻辑仍是 ON 或 ALARM。有卡 ON 假关机 10s 单闪；无卡灭灯；ALARM 假关机 10s 双闪 |
+| `FAKE_OFF` | 假关机：逻辑仍是 ON 或 ALARM。有卡 ON 假关机 10s 单闪；ALARM 假关机 10s 双闪。无卡 ON 不进假关机 |
 | `OFF` / `FORCE_OFF` | 真关机：灯灭，进 STOP2，IWDG 不咬醒 |
 
 优先级：**透传 > 逻辑告警 > 充电外观 > 其它**。透传时插 USB **不改** `PASSTHRU`，只改 LED 看起来像 CHARGE。
@@ -44,7 +49,7 @@
 
 ## 1. OFF（真关机）
 
-**进来：** 上电默认；ON/FAKE_OFF←ON/LOW_BATT 短按；退出告警且 prev=OFF；CHARGE 拔 USB 且 prev=OFF；LOW_BATT 发完且进入前是 OFF。
+**进来：** 上电默认；ON/FAKE_OFF←ON/LOW_BATT 短按；无卡 ON 提示 5s 结束；`FAKE_OFF←ON` 拔卡；退出告警且 prev=OFF；CHARGE 拔 USB 且 prev=OFF；LOW_BATT 发完且进入前是 OFF。
 
 STOP2 真关机醒后软件复位：USB → CHARGE；FALL 脚仍有效 → ALARM（保护/FORCE_OFF 除外）；其余 SOS 唤醒（含已松开的短按）→ 立刻 BATT。叫醒那一次按键不算第二次短按。
 
@@ -125,7 +130,7 @@ stateDiagram-v2
     ON --> ALARM: 长按 SOS 或 FALL
     ON --> CHARGE: 插入 USB
     ON --> FAKE_OFF: 一拍结束且无 USB\n有卡继续 10s 闪
-    ON --> OFF: 连续无卡满 60min
+    ON --> OFF: 无卡 5s 提示结束
     ON --> LOW_BATT: 低电预警
     ON --> FORCE_OFF: 电池保护
     ON --> PASSTHRU: CLI 开透传
@@ -158,13 +163,13 @@ stateDiagram-v2
 
 ## 5. FAKE_OFF（假关机）
 
-**进来：** ON 或 ALARM 一拍结束（成功/失败/无卡都算）、无 USB。有卡 ON：不灭灯，RTC 10s 单闪（STOP0 不能靠 tick）。**无卡 ON：** 先 5 秒每秒三灯 100ms，再灭灯进假关机。ALARM 假关机仍 10s 双闪。ON / `FAKE_OFF←ON` 连续无卡满 **60 分钟** → 真 `OFF` + STOP2。
+**进来：** ON 有卡或 ALARM 一拍结束（成功/失败都算）、无 USB。有卡 ON：不灭灯，RTC 10s 单闪（STOP0 不能靠 tick）。**无卡 ON：** 先 5 秒每秒三灯 100ms，再真 `OFF` + STOP2，不进假关机。ALARM 假关机仍 10s 双闪。`FAKE_OFF←ON` 拔卡 → 真 `OFF`。
 
 ```mermaid
 stateDiagram-v2
     FAKE_OFF --> resume: 下一拍开始 SHOT_BUSY
     FAKE_OFF --> OFF: resume=ON 且短按
-    FAKE_OFF --> OFF: resume=ON 且连续无卡满 60min
+    FAKE_OFF --> OFF: resume=ON 且拔卡
     FAKE_OFF --> ALARM: resume=ON 且长按/FALL
     FAKE_OFF --> CHARGE: resume=ON 且 USB
     FAKE_OFF --> BATT: resume=ALARM 且短按
@@ -174,7 +179,7 @@ stateDiagram-v2
     FAKE_OFF --> FORCE_OFF: 10s 采到保护
 ```
 
-灯：`FAKE_OFF←ON` **有卡** 10s 三灯 100ms（RTC `LED_MSG_HB`）；**无卡**保持灭。`FAKE_OFF←ALARM` **10s 双闪**（先进假关机立刻灭灯，由 RTC 叫醒闪；STOP0 会停 SysTick，不能先亮再等 tick）。同一拍空载采 ADC 1 次（不改 CHARGE 的 15s 周期）。插卡/拔卡在假关机 ON 下会立刻开/关这套灯。
+灯：`FAKE_OFF←ON` **有卡** 10s 三灯 100ms（RTC `LED_MSG_HB`）。`FAKE_OFF←ALARM` **10s 双闪**（先进假关机立刻灭灯，由 RTC 叫醒闪；STOP0 会停 SysTick，不能先亮再等 tick）。同一拍空载采 ADC 1 次（不改 CHARGE 的 15s 周期）。假关机 ON 下插卡立刻开 10s 灯；拔卡进真 `OFF`。
 
 禁止：CHARGE / BATT / PASSTHRU / 有 USB。
 
@@ -195,6 +200,8 @@ stateDiagram-v2
 
 告警中插 USB **不会**进 CHARGE。
 
+灯、充电 ADC、IWDG 照旧。CDC：**进 CHARGE 开一次，确认拔出关一次**，中间不重枚举。
+
 ---
 
 ## 7. PASSTHRU（优先于充电）
@@ -214,7 +221,7 @@ stateDiagram-v2
 | 透传 + USB | 仍 `PASSTHRU` | CHARGE 流水 |
 | 透传无 USB | 仍 `PASSTHRU` | 全灭 |
 
-SOS/FALL 须先退出透传。OFF/ALARM/保护不能开透传。
+SOS/FALL 须先退出透传。OFF/ALARM/保护不能开透传。串口助手开/关：[`docs/board_bringup.md`](../../docs/board_bringup.md) 第 0.3、7、8 节（`stream.set` `enable:1/0`；关必须发 `{` 开头）。
 
 进 `PASSTHRU`：**先**静音 CDC ulog，**再**开模块 UART。退出路径一律恢复日志：
 

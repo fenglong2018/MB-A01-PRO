@@ -39,9 +39,13 @@
 #include "n32wb452.h"
 #include "bsp.h"
 #include "board_gpio.h"
+#include "board_clock.h"
 #include "log.h"
 #include "misc.h"
 #include "product_config.h"
+#if USE_USB_CDC
+#include "cdc_acm.h"
+#endif
 
 /**
  * @brief  Configures Vector Table base location.
@@ -76,7 +80,9 @@ void SysTick_Handler(void)
  */
 void rt_hw_init()
 {
-    /* 时钟已由 SystemInit 起来；先关电源轨 */
+    /* SystemInit 里 HSE 起振失败是静默的，会留在 8M 且 PLL 全关 */
+    board_clock_ensure_pll();
+
     board_gpio_early_init();
 
     NVIC_Configuration();
@@ -84,6 +90,14 @@ void rt_hw_init()
     NVIC_PriorityGroupConfig(NVIC_PriorityGroup_4);
 
     SysTick_Config(SystemCoreClock / RT_TICK_PER_SECOND);
+
+#if USE_USB_CDC
+    /* DEMO 在 main 开头立刻 USB_Init。插着线复位时主机马上读描述符。 */
+    if (board_usb_inserted())
+    {
+        usb_cdc_start();
+    }
+#endif
 
 #ifdef RT_USING_HEAP
     rt_system_heap_init((void *)n32wb452_SRAM_START, (void *)n32wb452_SRAM_END);

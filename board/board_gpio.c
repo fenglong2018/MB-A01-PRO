@@ -52,6 +52,20 @@ void board_gpio_outputs_off(void)
     PIN_WRITE(LED3_PORT, LED3_PIN, LED_OFF_LEVEL);
 }
 
+void board_gpio_hold_leds_off(void)
+{
+    /*
+     * Reset_Handler 在拷贝 .data / 等 HSE 之前调用。
+     * LED 低亮：复位后脚浮空，3.3V 经灯灌进引脚，LED3(PB2/BOOT1) 最明显。
+     * 关机 SOS 醒 STOP2 会软件复位，同一条路径再闪一次。
+     */
+    RCC->APB2PCLKEN |= RCC_APB2PCLKEN_IOPBEN;
+    (void)RCC->APB2PCLKEN;
+    gpio_out_pp_level(LED1_PORT, LED1_PIN, LED_OFF_LEVEL);
+    gpio_out_pp_level(LED2_PORT, LED2_PIN, LED_OFF_LEVEL);
+    gpio_out_pp_level(LED3_PORT, LED3_PIN, LED_OFF_LEVEL);
+}
+
 void board_gpio_early_init(void)
 {
     GPIO_InitType gpio;
@@ -85,15 +99,7 @@ void board_gpio_early_init(void)
     gpio_in_floating(FALL_KEY_PORT, FALL_KEY_PIN);
     gpio_in_floating(RD_BD_SIMCARD_PORT, RD_BD_SIMCARD_PIN);
 
-    /* USB 未枚举时 DP/DM 模拟，避免数字缓冲漏电 */
-    {
-        GPIO_InitType usb;
-
-        GPIO_InitStruct(&usb);
-        usb.Pin       = USB_DM_PIN | USB_DP_PIN;
-        usb.GPIO_Mode = GPIO_Mode_AIN;
-        GPIO_InitPeripheral(USB_DM_PORT, &usb);
-    }
+    /* PA11/PA12：DEMO 从不 GPIO_Init，交给 USB PHY */
 
     /*
      * STOP2 唤醒后走 NVIC_SystemReset，EXTI 那个沿在复位里没了；

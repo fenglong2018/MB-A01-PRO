@@ -2,7 +2,7 @@
  * @file adc_bat.h
  * @brief 锂电池电压采集 → OCV 查表百分比 / 电量等级
  *
- * 链路：ADC码值 → Vbat(mV) →（充电则减 offset）→ 101 档 percent → level
+ * 链路：ADC码值 × cfg.adc_vdda_mv（默认 3300）→ Vbat(mV) →（充电则减 offset）→ percent
  * 上电自采 1 次；之后由 MODE/SESSION 通知采集（无 1s 空转）。
  * 表数据在 adc_bat_soc.h（const 数组，非宏）；本头文件只放尺寸与门限宏。
  */
@@ -26,17 +26,13 @@ extern "C" {
 #define ADC_BAT_AVG_N           8
 #endif
 
-#ifndef ADC_BAT_VREFINT_MV
-#define ADC_BAT_VREFINT_MV      1200
-#endif
-
 /** 充电查表压差（mV）；运行时可由 cfg.charge_offset_mv 覆盖，0=关补偿 */
 #ifndef ADC_BAT_CHARGE_OFFSET_MV
-#define ADC_BAT_CHARGE_OFFSET_MV    100
+#define ADC_BAT_CHARGE_OFFSET_MV    0
 #endif
 /** ≥ 此端电压视为恒压，不再减 offset */
 #ifndef ADC_BAT_CHARGE_CV_MV
-#define ADC_BAT_CHARGE_CV_MV        4180
+#define ADC_BAT_CHARGE_CV_MV        4200
 #endif
 #ifndef ADC_BAT_CHARGE_PERIOD_MS
 #define ADC_BAT_CHARGE_PERIOD_MS    15000

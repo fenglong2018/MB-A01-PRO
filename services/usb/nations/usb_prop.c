@@ -41,6 +41,7 @@
 #include "usb_desc.h"
 #include "usb_pwr.h"
 #include "hw_config.h"
+#include "usb_hw.h"
 #include "cdc_acm.h"
 
 /* Private typedef -----------------------------------------------------------*/
@@ -328,6 +329,7 @@ USB_Result Virtual_Com_Port_NoData_Setup(uint8_t RequestNo)
 *******************************************************************************/
 uint8_t *Virtual_Com_Port_GetDeviceDescriptor(uint16_t Length)
 {
+    g_usb_desc_cnt++;
     return Standard_GetDescriptorData(Length, &Device_Descriptor);
 }
 

@@ -7,7 +7,7 @@ MCU 睡：本目录。射频轨：`BSP/pwr`。细则：[`docs/low_power_stop2.md
 ```mermaid
 flowchart TD
   I[tidle] --> H[pm_idle_hook]
-  H --> L{lock 或 USB_IN?}
+  H --> L{lock 或 USB_IN 或 CDC on?}
   L -->|是| S[跳过，PLL/USB 48M 仍在]
   L -->|否| T[STOP0]
   T --> R[醒来 board_clock_resume]
@@ -25,5 +25,5 @@ flowchart TD
   H --> I[软件复位]
 ```
 
-已 lock：MODE 非 FAKE_OFF；KEY 滤波；nvflash；会话发信。USB 线：idle 读 `board_usb_inserted()`。
+已 lock：MODE 非 FAKE_OFF；KEY 滤波；nvflash；会话发信。USB：idle 读 PA7 或 `usb_cdc_is_on()`。
 仅 `FAKE_OFF` 放行 STOP0（RTC 10s 闪灯）。OFF/FORCE_OFF 走 STOP2。
