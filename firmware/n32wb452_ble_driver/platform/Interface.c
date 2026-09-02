@@ -164,13 +164,14 @@ void bt_features_init(void)
     uint32_t i;
     uint8_t  addr[BD_ADDR_LEN], ch1, ch2;
     uint8_t device_name[32] = {0};
-    uint8_t *ptmp = "12:34:56:AB:CD:EF";
+    uint8_t *ptmp = (uint8_t *)"12:34:56:AB:CD:EF";
 #endif
 
     app_env.adv_para.adv_type       =  GAPM_ADV_UNDIRECT;    // GAP OPCODE     direct  ,no connect  undirect
     app_env.adv_para.channel_map    = 0x7; // BTstack_data.user_config.adv_para.channel_map;//
-    app_env.adv_para.adv_int_min    = 0x320;  //Minimum broadcast interval: 0.5S = 0x320*0.625 ms
-    app_env.adv_para.adv_int_max    = 0x320;  //Maxmum broadcast interval: 0.5S = 0x320*0.625 ms
+    /* 100~150ms。官方 0x320=500ms 电脑能扫到，安卓低功耗扫描经常漏 */
+    app_env.adv_para.adv_int_min    = 0xA0;
+    app_env.adv_para.adv_int_max    = 0xF0;
     app_env.adv_para.discover_mode  = GAP_GEN_DISCOVERABLE;
     
 #ifdef N32WB452_BT_API
@@ -185,7 +186,7 @@ void bt_features_init(void)
         if (name_len >= 3) {//must contain more than 2 characters
             //fill name in addr data 
             app_env.adv_data_buf[app_env.adv_data_len++] = name_len + 1; // length
-            app_env.adv_data_buf[app_env.adv_data_len++] = 0x08;                // device name tag
+            app_env.adv_data_buf[app_env.adv_data_len++] = 0x09; /* Complete Local Name，安卓认这个 */
             memcpy( &app_env.adv_data_buf[app_env.adv_data_len], device_name, name_len);
             app_env.adv_data_len += name_len;
             memcpy(app_env.dev_name, device_name, name_len);
@@ -195,7 +196,7 @@ void bt_features_init(void)
             uint8_t dev_name_len = 6;
             //fill name in addr data 
             app_env.adv_data_buf[app_env.adv_data_len++] = dev_name_len + 1; // length
-            app_env.adv_data_buf[app_env.adv_data_len++] = 0x08;                // device name tag
+            app_env.adv_data_buf[app_env.adv_data_len++] = 0x09;
             memcpy( &app_env.adv_data_buf[app_env.adv_data_len], dev_name, dev_name_len);
             app_env.adv_data_len += dev_name_len;
             memcpy(app_env.dev_name, device_name, name_len);
@@ -205,7 +206,7 @@ void bt_features_init(void)
         uint8_t dev_name_len = 6;
         //fill name in addr data 
         app_env.adv_data_buf[app_env.adv_data_len++] = dev_name_len + 1; // length
-        app_env.adv_data_buf[app_env.adv_data_len++] = 0x08;                // device name tag
+        app_env.adv_data_buf[app_env.adv_data_len++] = 0x09;
         memcpy( &app_env.adv_data_buf[app_env.adv_data_len], dev_name, dev_name_len);
         app_env.adv_data_len += dev_name_len;
         memcpy(app_env.dev_name, device_name, name_len);
@@ -215,10 +216,21 @@ void bt_features_init(void)
     uint8_t dev_name_len = 6;
     //fill name in addr data 
     app_env.adv_data_buf[app_env.adv_data_len++] = dev_name_len + 1; // length
-    app_env.adv_data_buf[app_env.adv_data_len++] = 0x08;                // device name tag
+    app_env.adv_data_buf[app_env.adv_data_len++] = 0x09;
     memcpy( &app_env.adv_data_buf[app_env.adv_data_len], dev_name, dev_name_len);
     app_env.adv_data_len += dev_name_len;
     memcpy(app_env.dev_name, device_name, name_len);
+#endif
+
+#ifdef N32WB452_BT_API
+    /* 广播里带 0xFEE7，手机可按 Service 扫到（不必依赖设备名） */
+    if (g_bt_init && ((app_env.adv_data_len + 4u) <= sizeof(app_env.adv_data_buf))) {
+        uint16_t uuid = g_bt_init->service[0].svc_uuid;
+        app_env.adv_data_buf[app_env.adv_data_len++] = 3;
+        app_env.adv_data_buf[app_env.adv_data_len++] = 0x03;
+        app_env.adv_data_buf[app_env.adv_data_len++] = (uint8_t)(uuid & 0xFFu);
+        app_env.adv_data_buf[app_env.adv_data_len++] = (uint8_t)((uuid >> 8) & 0xFFu);
+    }
 #endif
 
 #ifdef N32WB452_BT_API

@@ -29,6 +29,7 @@
 #define USE_PM              1   /* BSP/pm：idle hook → STOP0 浅睡 */
 #define USE_IWDG            1   /* BSP/iwdg：非关机态开，超时≈26s */
 #define USE_CLI             1   /* services/cli：JSON 控制面 */
+#define USE_BLE             1   /* BSP/ble：插 USB 开、拔 USB 关；Nations slave 栈 */
 #define USE_JSON_FILE       0
 #define USE_MODBUS          0
 #else
@@ -43,6 +44,7 @@
 #define USE_PM              0
 #define USE_IWDG            0
 #define USE_CLI             0
+#define USE_BLE             0
 #define USE_JSON_FILE       0
 #define USE_MODBUS          0
 #endif

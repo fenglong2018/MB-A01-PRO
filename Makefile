@@ -53,6 +53,7 @@ DEFS += -DRT_USING_NEWLIB
 DEFS += -DHAVE_SIGVAL -DHAVE_SIGEVENT -DHAVE_SIGINFO
 DEFS += -DHAVE_SYS_SELECT_H
 DEFS += -DHSE_VALUE=32000000
+DEFS += -DN32WB452_BT_API
 
 CROSS_COMPILE ?= arm-none-eabi-
 
@@ -90,6 +91,9 @@ C_SOURCES += $(BSP_DIR)/adc/adc_bat.c
 C_SOURCES += $(BSP_DIR)/gnss/gnss.c
 C_SOURCES += $(BSP_DIR)/rdss/rdss.c
 C_SOURCES += $(BSP_DIR)/rtc/rtc_hw.c
+C_SOURCES += $(BSP_DIR)/ble/ble.c
+C_SOURCES += $(BSP_DIR)/ble/bsp_timer.c
+C_SOURCES += $(BSP_DIR)/ble/n32wb452_data_fifo.c
 C_SOURCES += $(APP_DIR)/mode/mode.c
 C_SOURCES += $(APP_DIR)/session/session_alarm.c
 C_SOURCES += $(APP_DIR)/session/msg_pack.c
@@ -108,6 +112,25 @@ C_SOURCES += $(FW_DIR)/$(TARGET_PLATFORM)_std_periph_driver/src/n32wb452_bkp.c
 C_SOURCES += $(FW_DIR)/$(TARGET_PLATFORM)_std_periph_driver/src/n32wb452_flash.c
 C_SOURCES += $(FW_DIR)/$(TARGET_PLATFORM)_std_periph_driver/src/misc.c
 C_SOURCES += $(FW_DIR)/$(TARGET_PLATFORM)_std_periph_driver/src/n32wb452_iwdg.c
+C_SOURCES += $(FW_DIR)/$(TARGET_PLATFORM)_std_periph_driver/src/n32wb452_tim.c
+C_SOURCES += $(FW_DIR)/$(TARGET_PLATFORM)_std_periph_driver/src/n32wb452_spi.c
+
+C_SOURCES += $(FW_DIR)/n32wb452_ble_driver/n32wb452_ble_api.c
+C_SOURCES += $(FW_DIR)/n32wb452_ble_driver/platform/Eif_debug.c
+C_SOURCES += $(FW_DIR)/n32wb452_ble_driver/platform/Eif_flash.c
+C_SOURCES += $(FW_DIR)/n32wb452_ble_driver/platform/Eif_timer.c
+C_SOURCES += $(FW_DIR)/n32wb452_ble_driver/platform/Interface.c
+C_SOURCES += $(FW_DIR)/n32wb452_ble_driver/profile/app.c
+C_SOURCES += $(FW_DIR)/n32wb452_ble_driver/profile/app_batt.c
+C_SOURCES += $(FW_DIR)/n32wb452_ble_driver/profile/app_sec.c
+C_SOURCES += $(FW_DIR)/n32wb452_ble_driver/profile/app_task.c
+C_SOURCES += $(FW_DIR)/n32wb452_ble_driver/profile/app_user.c
+C_SOURCES += $(FW_DIR)/n32wb452_ble_driver/profile/bass.c
+C_SOURCES += $(FW_DIR)/n32wb452_ble_driver/profile/bass_task.c
+C_SOURCES += $(FW_DIR)/n32wb452_ble_driver/profile/prf.c
+C_SOURCES += $(FW_DIR)/n32wb452_ble_driver/profile/prf_utils.c
+C_SOURCES += $(FW_DIR)/n32wb452_ble_driver/profile/user.c
+C_SOURCES += $(FW_DIR)/n32wb452_ble_driver/profile/user_task.c
 
 C_SOURCES += $(RTT_DIR)/src/clock.c
 C_SOURCES += $(RTT_DIR)/src/device.c
@@ -177,6 +200,11 @@ C_INCLUDES += -I$(BSP_DIR)/iwdg
 C_INCLUDES += -I$(BSP_DIR)/rdss
 C_INCLUDES += -I$(BSP_DIR)/gnss
 C_INCLUDES += -I$(BSP_DIR)/rtc
+C_INCLUDES += -I$(BSP_DIR)/ble
+C_INCLUDES += -I$(FW_DIR)/n32wb452_ble_driver
+C_INCLUDES += -I$(FW_DIR)/n32wb452_ble_driver/inc
+C_INCLUDES += -I$(FW_DIR)/n32wb452_ble_driver/profile/inc
+C_INCLUDES += -I$(FW_DIR)/n32wb452_ble_driver/platform/inc
 C_INCLUDES += -I$(BSP_DIR)/nvflash
 C_INCLUDES += -I$(BSP_DIR)/bkp_user
 C_INCLUDES += -I$(BSP_DIR)/rram
@@ -205,6 +233,8 @@ ASM_IT = -Wa,-mimplicit-it=thumb
 CFLAGS += $(MCU) -Wall $(OPT)
 CFLAGS += -ffunction-sections -fdata-sections
 CFLAGS += -fno-common -fmessage-length=0
+# 官方 BLE 源码：注释续行 / 符号位 / 死变量，IAR 不报，GCC -Wall 会刷屏
+BLE_VENDOR_CFLAGS := -Wno-comment -Wno-pointer-sign -Wno-unused-variable -Wno-unused-but-set-variable
 ifeq ($(DEBUG), 1)
 CFLAGS += -g -gdwarf-2
 endif
@@ -221,6 +251,8 @@ LFLAGS += --specs=nano.specs --specs=nosys.specs
 LFLAGS += -lc -lm -lnosys
 LFLAGS += -Wl,-Map=$(BUILD_DIR)/$(TARGET).map,--cref
 LDSCRIPT = $(FW_DIR)/CMSIS/device/$(TARGET_PLATFORM)_flash.ld
+BLE_LIBS  = $(FW_DIR)/n32wb452_ble_driver/lib/IAR/host.a
+BLE_LIBS += $(FW_DIR)/n32wb452_ble_driver/lib/IAR/n32wb452_ble.a
 
 OBJECTS  = $(addprefix $(BUILD_DIR)/,$(notdir $(C_SOURCES:.c=.o)))
 OBJECTS += $(addprefix $(BUILD_DIR)/,$(notdir $(ASM_SOURCES_S:.s=.o)))
@@ -243,7 +275,9 @@ info:
 	@echo "Targets       : make | make clean | make flash | make cmp | make reset"
 
 $(BUILD_DIR)/%.o: %.c Makefile | $(BUILD_DIR)
-	$(CROSS_COMPILE)gcc $(CFLAGS) $(DEFS) $(C_INCLUDES) -c \
+	$(CROSS_COMPILE)gcc $(CFLAGS) \
+		$(if $(findstring n32wb452_ble_driver,$<),$(BLE_VENDOR_CFLAGS)) \
+		$(DEFS) $(C_INCLUDES) -c \
 		-Wa,-a,-ad,-alms=$(BUILD_DIR)/$(notdir $(<:.c=.lst)) $< -o $@
 
 $(BUILD_DIR)/%.o: %.s Makefile | $(BUILD_DIR)
@@ -253,7 +287,7 @@ $(BUILD_DIR)/%.o: %.S Makefile | $(BUILD_DIR)
 	$(CROSS_COMPILE)gcc -x assembler-with-cpp $(ASFLAGS) $(DEFS) $(C_INCLUDES) -c $< -o $@
 
 $(BUILD_DIR)/$(TARGET).elf: $(OBJECTS) Makefile
-	$(CROSS_COMPILE)gcc $(OBJECTS) $(LFLAGS) -T$(LDSCRIPT) -o $@
+	$(CROSS_COMPILE)gcc $(OBJECTS) -Wl,--start-group $(BLE_LIBS) -Wl,--end-group $(LFLAGS) -T$(LDSCRIPT) -o $@
 
 $(BUILD_DIR)/$(TARGET).bin: $(BUILD_DIR)/$(TARGET).elf
 	$(CROSS_COMPILE)objcopy -O binary -S $< $@

@@ -54,15 +54,11 @@
 #include <stdbool.h>
 #include "rwip_config.h"
 
-#define GLOBAL_INT_DISABLE()    \
-do{\
-     __disable_irq();\  //__set_PRIMASK(1);\
-}while(0);\
+#define GLOBAL_INT_DISABLE() \
+    do { __disable_irq(); } while (0)
 
-#define GLOBAL_INT_RESTORE()    \
-do{\
- __enable_irq();\   //  __set_PRIMASK(0);\
-}while(0);\
+#define GLOBAL_INT_RESTORE() \
+    do { __enable_irq(); } while (0)
 
 //#include "compiler.h"      // inline functions
 #define __INLINE  inline

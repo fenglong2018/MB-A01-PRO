@@ -34,9 +34,15 @@
  */
 
 #include "n32wb452_gpio.h"
+#include "n32wb452_exti.h"
 #include "drv_gpio.h"
 #include "pin.h"
 #include "rthw.h"
+#include <rtdef.h>
+
+RT_WEAK void n32wb452_exti14_hook(void)
+{
+}
 
 #ifdef RT_USING_PIN
 
@@ -631,6 +637,11 @@ void EXTI9_5_IRQHandler(void)
 void EXTI15_10_IRQHandler(void)
 {
     rt_interrupt_enter();
+    /* Nations BLE 控制器 IRQ 在 EXTI14（与官方 slave 例程一致） */
+    if (EXTI_GetStatusFlag(EXTI_LINE14) != RESET)
+    {
+        n32wb452_exti14_hook();
+    }
     N32WB452_GPIO_EXTI_IRQHandler(10);
     N32WB452_GPIO_EXTI_IRQHandler(11);
     N32WB452_GPIO_EXTI_IRQHandler(12);

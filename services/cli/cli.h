@@ -8,6 +8,9 @@
 #ifndef __CLI_H__
 #define __CLI_H__
 
+#include <stdint.h>
+#include "cli_ch.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -34,6 +37,12 @@ extern "C" {
  * CLI 初始化。USE_CLI 时由 INIT_APP_EXPORT(app_cli_init) 自动调用。
  */
 int cli_init(void);
+
+/** BLE / 其它入口喂下行字节；USB 仍走 CDC 回调 */
+void cli_feed(cli_ch_t ch, const uint8_t *data, uint32_t len);
+/** 当前正在处理的那一行来自哪路（仅 CLI 线程） */
+cli_ch_t cli_current_ch(void);
+int cli_write(cli_ch_t ch, const uint8_t *data, uint32_t len);
 
 #ifdef __cplusplus
 }

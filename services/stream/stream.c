@@ -6,6 +6,7 @@
 #include "stream_ports.h"
 #include "product_config.h"
 #include "mode.h"
+#include "cli.h"
 #if USE_USB_CDC
 #include "cdc_io.h"
 #endif
@@ -44,6 +45,18 @@ static stream_item_t s_streams[] = {
     {STREAM_NAME_RDSS, STREAM_CH_RDSS, 0, 0, NULL},
 #endif
 };
+
+static cli_ch_t s_pt_ch = CLI_CH_NONE;
+
+cli_ch_t stream_passthru_ch(void)
+{
+    return s_pt_ch;
+}
+
+void stream_passthru_reset(void)
+{
+    s_pt_ch = CLI_CH_NONE;
+}
 
 static stream_item_t *stream_find(const char *name)
 {
@@ -86,7 +99,7 @@ static int app_stream_init(void)
 INIT_COMPONENT_EXPORT(app_stream_init);
 #endif
 
-int stream_set_enable(const char *name, int enable)
+int stream_set_enable_ch(const char *name, int enable, cli_ch_t ch)
 {
     stream_item_t *item = stream_find(name);
     uint8_t flags;
@@ -116,22 +129,34 @@ int stream_set_enable(const char *name, int enable)
         if (enable)
         {
             flags = (uint8_t)(flags | bit);
+            if (ch != CLI_CH_NONE)
+            {
+                s_pt_ch = ch;
+            }
         }
         else
         {
             flags = (uint8_t)(flags & ~bit);
+            if (flags == 0u)
+            {
+                s_pt_ch = CLI_CH_NONE;
+            }
         }
         if (mode_passthru_set(flags) != RT_EOK)
         {
             return STREAM_ERR_DISABLED;
         }
-        /* 表内 enable 与 MODE 异步对齐：先按请求置位，拒绝时 MODE 不会开通道 */
         item->enable = enable ? 1 : 0;
         return STREAM_OK;
     }
 
     item->enable = enable ? 1 : 0;
     return STREAM_OK;
+}
+
+int stream_set_enable(const char *name, int enable)
+{
+    return stream_set_enable_ch(name, enable, cli_current_ch());
 }
 
 int stream_is_enabled(const char *name)
@@ -201,11 +226,14 @@ int stream_write(const char *name, const uint8_t *data, uint32_t len)
     {
         return STREAM_ERR_DISABLED;
     }
+    if (s_pt_ch != CLI_CH_NONE)
+    {
+        return (cli_write(s_pt_ch, data, len) > 0) ? STREAM_OK : STREAM_ERR_NO_SINK;
+    }
     if (item->sink == NULL)
     {
         return STREAM_ERR_NO_SINK;
     }
-
     return item->sink(data, len);
 }
 

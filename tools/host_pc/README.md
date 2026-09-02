@@ -58,6 +58,19 @@ py -3 -m pip install -r requirements.txt
 py -3 -m shy_host
 ```
 
+日常请双击 `run.bat`（用 `pythonw`，没有黑框/PowerShell）。在 Cursor 终端里跑 `py -3 -m shy_host` 时，那个窗口是终端本身，关掉等于退出上位机。
+
+## 生成 EXE
+
+双击 `build_exe.bat`，或：
+
+```bat
+cd tools\host_pc
+py -3 -m pip install -r requirements.txt pyinstaller
+py -3 -m PyInstaller --noconfirm --clean --windowed --name shySOFT_Host --collect-all PySide6 --paths . shy_host\main.py
+```
+
+生成目录：`tools\host_pc\dist\shySOFT_Host\shySOFT_Host.exe`（同目录的 dll 要一起拷）。第一次启动可能被 Defender 扫一会儿。`dist/`、`build/` 已加入 `.gitignore`，不要提交。
 ## 使用要点
 
 1. 选 COM → 连接（DTR）→ Ping  

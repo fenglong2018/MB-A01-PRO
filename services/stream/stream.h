@@ -6,6 +6,7 @@
 #define __STREAM_H__
 
 #include <stdint.h>
+#include "cli_ch.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,6 +25,10 @@ int stream_init(void);
 
 /** 运行时开关；未编进固件的流返回 STREAM_ERR_NOT_BUILT */
 int stream_set_enable(const char *name, int enable);
+int stream_set_enable_ch(const char *name, int enable, cli_ch_t ch);
+/** 当前透传发起方；未开则为 CLI_CH_NONE */
+cli_ch_t stream_passthru_ch(void);
+void stream_passthru_reset(void);
 
 int stream_is_enabled(const char *name);
 int stream_is_built(const char *name);

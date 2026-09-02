@@ -1,0 +1,2 @@
+# 把下面改成你机器上的 Android SDK 路径后，另存为 local.properties（不要提交）
+sdk.dir=C:\\Users\\HP-FENGRONG\\AppData\\Local\\Android\\Sdk

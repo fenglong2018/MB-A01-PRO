@@ -41,6 +41,10 @@ extern "C" {
 
 #include "n32wb452.h"
 
+#ifndef MIN
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+#endif
+
 /* main 模块 ulog（须在 #include <ulog.h> 之前生效） */
 #define LOG_TAG     "main"
 #define LOG_LVL     7

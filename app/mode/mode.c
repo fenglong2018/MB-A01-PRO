@@ -33,8 +33,12 @@
 #include "rdss.h"
 #endif
 #include "ulog_cdc_be.h"
+#include "stream.h"
 #if USE_USB_CDC
 #include "cdc_acm.h"
+#endif
+#if USE_BLE
+#include "ble.h"
 #endif
 
 static struct rt_event s_mode_evt;
@@ -323,6 +327,9 @@ static void maybe_stop2(void)
     }
     hb_stop();
     iwdg_stop2_quiet();
+#if USE_BLE
+    ble_stop();
+#endif
 #if USE_USB_CDC
     usb_cdc_stop();
 #endif
@@ -638,10 +645,36 @@ static void passthru_radio_apply(uint8_t want)
 }
 
 /** 退出透传，回到 resume（考虑 USB / 保护） */
+static void usb_cable_on(void)
+{
+#if USE_USB_CDC
+    usb_cdc_start();
+#endif
+#if USE_BLE
+    ble_start();
+#endif
+}
+
+static void usb_cable_off(void)
+{
+#if USE_BLE
+    if (stream_passthru_ch() == CLI_CH_BLE)
+    {
+        stream_passthru_reset();
+        (void)mode_passthru_set(0);
+    }
+    ble_stop();
+#endif
+#if USE_USB_CDC
+    usb_cdc_stop();
+#endif
+}
+
 static void exit_passthru(void)
 {
     mode_state_t resume = s_pt_resume;
 
+    stream_passthru_reset();
     passthru_radio_stop_all();
     passthru_ulog_hold(0);
     s_pt_resume = MODE_ST_OFF;
@@ -802,9 +835,7 @@ static void enter_charge(mode_state_t from_prev)
     s_prev = from_prev;
     s_state = MODE_ST_CHARGE;
     hb_stop();
-#if USE_USB_CDC
-    usb_cdc_start();
-#endif
+    usb_cable_on();
     iwdg_for_alive();
     rt_kprintf("[MODE] -> CHARGE (prev=%s)\n", mode_name(s_prev));
     adc_on_charge_enter();
@@ -1253,9 +1284,7 @@ static void handle_usb_in(void)
 {
     mode_state_t under;
 
-#if USE_USB_CDC
-    usb_cdc_start();
-#endif
+    usb_cable_on();
     if (s_state == MODE_ST_PASSTHRU)
     {
         /* 保持透传；LED 由 mode_ui_sync 显示 CHARGE */
@@ -1294,9 +1323,7 @@ static void handle_usb_in(void)
 
 static void handle_usb_out(void)
 {
-#if USE_USB_CDC
-    usb_cdc_stop();
-#endif
+    usb_cable_off();
     if (s_state == MODE_ST_PASSTHRU)
     {
         /* 仍透传；若 resume 曾是 CHARGE，退出时回到 s_prev */
@@ -1656,12 +1683,11 @@ int mode_init(void)
     }
     else if (s_state == MODE_ST_ALARM)
     {
-#if USE_USB_CDC
+        /* 保持续告警；USB 不改逻辑告警，但要能出 COM，并开 BLE */
         if (usb_is_present())
         {
-            usb_cdc_start();
+            usb_cable_on();
         }
-#endif
     }
     else if (usb_is_present())
     {

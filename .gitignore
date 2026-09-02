@@ -10,3 +10,10 @@ GCC/build/
 __pycache__/
 *.py[cod]
 *.pyo
+tools/host_pc/dist/
+tools/host_pc/build/
+tools/host_pc/*.spec
+tools/android/.gradle/
+tools/android/.idea/
+tools/android/local.properties
+tools/android/**/build/

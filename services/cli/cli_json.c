@@ -3,10 +3,15 @@
  * @brief 轻量 JSON 命令分发（骨架，不依赖 cJSON）
  */
 #include "cli_json.h"
+#include "cli.h"
 #include "cli_io.h"
 #include "cli_test.h"
 #include "stream.h"
 #include "cfg.h"
+#include "config.h"
+#if USE_BLE
+#include "ble.h"
+#endif
 
 #include <rtthread.h>
 #include <stdint.h>
@@ -132,6 +137,22 @@ int cli_json_handle_line(const char *line, char *rsp, int rsp_size)
         return rsp_ok(rsp, rsp_size, id, "\"pong\":1");
     }
 
+    if (strcmp(cmd, "ble.get") == 0)
+    {
+#if USE_BLE
+        char nm[24];
+
+        ble_name(nm, (int)sizeof(nm));
+        snprintf(tmp, sizeof(tmp),
+                 "\"on\":%u,\"connected\":%u,\"stack\":%u,\"name\":\"%s\"",
+                 (unsigned)ble_is_on(), (unsigned)ble_is_connected(),
+                 (unsigned)ble_stack_ready(), nm);
+        return rsp_ok(rsp, rsp_size, id, tmp);
+#else
+        return rsp_err(rsp, rsp_size, id, "not_built");
+#endif
+    }
+
     if (strcmp(cmd, "stream.list") == 0)
     {
         ret = stream_list_json(tmp, (int)sizeof(tmp));
@@ -158,7 +179,10 @@ int cli_json_handle_line(const char *line, char *rsp, int rsp_size)
         {
             return rsp_err(rsp, rsp_size, id, stream_err_str(ret));
         }
-        snprintf(tmp, sizeof(tmp), "\"name\":\"%s\",\"enable\":%d,\"built\":1", name, enable ? 1 : 0);
+        snprintf(tmp, sizeof(tmp),
+                 "\"name\":\"%s\",\"enable\":%d,\"built\":1,\"via\":\"%s\"",
+                 name, enable ? 1 : 0,
+                 (cli_current_ch() == CLI_CH_BLE) ? "ble" : "usb");
         return rsp_ok(rsp, rsp_size, id, tmp);
     }
 

@@ -43,6 +43,18 @@ extern "C" {
 
 #include "n32wb452.h"
 
+/* 例程放在 main.h；本工程避免 ble.c 去 include main.h（会污染 LOG_TAG） */
+typedef enum
+{
+    BT_IDLE = 0,
+    BT_INITIALIZED,
+    BT_ADVERTISING,
+    BT_CONNECTED,
+    BT_DISCONNECTED,
+    BT_STS_TOTAL
+} BT_SERVER_STS;
+extern BT_SERVER_STS gBT_STS;
+
 #define BLE_SERVICE_USED        1
 #define BLE_CHARACTER_USED      1
 

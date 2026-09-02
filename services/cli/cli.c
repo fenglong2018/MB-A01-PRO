@@ -7,11 +7,15 @@
 #include "cdc_io.h"
 #include "product_config.h"
 #include "mode.h"
+#include "stream.h"
 #if USE_GNSS
 #include "gnss.h"
 #endif
 #if USE_RDSS
 #include "rdss.h"
+#endif
+#if USE_BLE
+#include "ble.h"
 #endif
 
 #include <rthw.h>
@@ -50,35 +54,47 @@ static void passthru_downlink(const uint8_t *data, uint32_t len)
 #endif
 }
 
+typedef struct
+{
+    uint8_t ch;
+    uint8_t b;
+} cli_rx_t;
+
 static struct rt_semaphore s_rx_notice;
-static rt_uint8_t s_rx_rb[CLI_RX_RB_SIZE];
+static cli_rx_t s_rx_rb[CLI_RX_RB_SIZE];
 static rt_uint16_t s_rx_head;
 static rt_uint16_t s_rx_tail;
 static char s_line[CLI_LINE_MAX];
 static char s_rsp[CLI_RSP_MAX];
 static struct rt_thread s_cli_thread;
 static rt_uint8_t s_cli_stack[CLI_THREAD_STACK];
+static cli_ch_t s_line_ch = CLI_CH_USB;
 
-static void cli_rb_put(const uint8_t *data, uint32_t len)
+static void cli_rb_put(cli_ch_t ch, const uint8_t *data, uint32_t len)
 {
     uint32_t i;
     rt_base_t level;
 
+    if ((ch == CLI_CH_NONE) || (data == RT_NULL) || (len == 0))
+    {
+        return;
+    }
     level = rt_hw_interrupt_disable();
     for (i = 0; i < len; i++)
     {
         rt_uint16_t next = (rt_uint16_t)((s_rx_head + 1) % CLI_RX_RB_SIZE);
         if (next == s_rx_tail)
         {
-            break; /* 满则丢后续 */
+            break;
         }
-        s_rx_rb[s_rx_head] = data[i];
+        s_rx_rb[s_rx_head].ch = (uint8_t)ch;
+        s_rx_rb[s_rx_head].b = data[i];
         s_rx_head = next;
     }
     rt_hw_interrupt_enable(level);
 }
 
-static int cli_rb_get_byte(uint8_t *out)
+static int cli_rb_get(cli_rx_t *out)
 {
     rt_base_t level;
 
@@ -94,14 +110,45 @@ static int cli_rb_get_byte(uint8_t *out)
     return 1;
 }
 
-static void cli_on_cdc_rx(const uint8_t *data, uint32_t len)
+void cli_feed(cli_ch_t ch, const uint8_t *data, uint32_t len)
+{
+    cli_rb_put(ch, data, len);
+    rt_sem_release(&s_rx_notice);
+}
+
+cli_ch_t cli_current_ch(void)
+{
+    return s_line_ch;
+}
+
+int cli_write(cli_ch_t ch, const uint8_t *data, uint32_t len)
 {
     if ((data == RT_NULL) || (len == 0))
     {
-        return;
+        return 0;
     }
-    cli_rb_put(data, len);
-    rt_sem_release(&s_rx_notice);
+    if (ch == CLI_CH_USB)
+    {
+#if USE_USB_CDC
+        return (int)cdc_acm_write(data, len);
+#else
+        return 0;
+#endif
+    }
+    if (ch == CLI_CH_BLE)
+    {
+#if USE_BLE
+        return ble_write(data, len);
+#else
+        return 0;
+#endif
+    }
+    return 0;
+}
+
+static void cli_on_cdc_rx(const uint8_t *data, uint32_t len)
+{
+    cli_feed(CLI_CH_USB, data, len);
 }
 
 static void cli_thread_entry(void *param)
@@ -112,33 +159,35 @@ static void cli_thread_entry(void *param)
 
     while (1)
     {
-        uint8_t ch;
+        cli_rx_t rx;
 
         if (rt_sem_take(&s_rx_notice, RT_WAITING_FOREVER) != RT_EOK)
         {
             continue;
         }
 
-        while (cli_rb_get_byte(&ch))
+        while (cli_rb_get(&rx))
         {
-            if ((ch == '\r') || (ch == '\n'))
+            if ((rx.b == '\r') || (rx.b == '\n'))
             {
                 if (line_len > 0)
                 {
                     s_line[line_len] = '\0';
-                    if ((mode_passthru_flags_get() != 0u) && !line_is_json_cmd(s_line))
+                    if ((mode_passthru_flags_get() != 0u) &&
+                        (stream_passthru_ch() == s_line_ch) &&
+                        !line_is_json_cmd(s_line))
                     {
                         static const uint8_t crlf[2] = {'\r', '\n'};
 
                         passthru_downlink((const uint8_t *)s_line, (uint32_t)line_len);
                         passthru_downlink(crlf, 2u);
                     }
-                    else
+                    else if (line_is_json_cmd(s_line))
                     {
                         int n = cli_json_handle_line(s_line, s_rsp, (int)sizeof(s_rsp));
                         if (n > 0)
                         {
-                            (void)cdc_acm_write((const uint8_t *)s_rsp, (uint32_t)n);
+                            (void)cli_write(s_line_ch, (const uint8_t *)s_rsp, (uint32_t)n);
                         }
                     }
                     line_len = 0;
@@ -148,11 +197,15 @@ static void cli_thread_entry(void *param)
 
             if (line_len < (CLI_LINE_MAX - 1))
             {
-                s_line[line_len++] = (char)ch;
+                if (line_len == 0)
+                {
+                    s_line_ch = (cli_ch_t)rx.ch;
+                }
+                s_line[line_len++] = (char)rx.b;
             }
             else
             {
-                line_len = 0; /* 超长丢弃本行 */
+                line_len = 0;
             }
         }
     }
@@ -181,7 +234,7 @@ int cli_init(void)
         return -1;
     }
     rt_thread_startup(&s_cli_thread);
-    LOG_I("cli ready (JSON over CDC)");
+    LOG_I("cli ready (JSON over USB/BLE)");
     return 0;
 }
 

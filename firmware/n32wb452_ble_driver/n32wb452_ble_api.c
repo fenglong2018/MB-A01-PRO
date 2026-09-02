@@ -33,6 +33,7 @@
  * @copyright Copyright (c) 2019, Nations Technologies Inc. All rights reserved.
  */
 #include "n32wb452.h"
+#include <string.h>
 #include "Eif_uart.h"
 #include "user.h"
 #include "n32wb452_ble_api.h"

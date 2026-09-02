@@ -1,6 +1,6 @@
 # CLI（USB JSON 控制面）
 
-通过 **USB 虚拟串口** 发送一行 JSON，设备回一行 `{"type":"rsp",...}`。  
+通过 **USB 虚拟串口或 BLE** 发送一行 JSON，设备回一行 `{"type":"rsp",...}`（回发起方）。  
 日志仍走 ulog（无 `type` 字段），可用串口工具同时看 LOG 与应答。
 
 收包流程图：[`flow.md`](flow.md)。模块总表：[`docs/module_status.md`](../../docs/module_status.md)。
@@ -34,6 +34,7 @@
 
 ```json
 {"id":1,"cmd":"ping"}
+{"id":40,"cmd":"ble.get"}
 {"id":2,"cmd":"stream.list"}
 {"id":3,"cmd":"stream.set","name":"gnss","enable":1}
 {"id":4,"cmd":"stream.get","name":"rdss"}
